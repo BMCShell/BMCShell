@@ -73,7 +73,7 @@ go build -trimpath -o BMCShell-Scaffold.exe ./cmd/bmc-scaffold
 
 ## V2 工具和代理
 
-IPMI、Redfish、SSH、SNMP、CID 和 SMASH 各为独立 Git 仓库和安装包。CID、SMASH 的清单依赖 IPMI。这些包的 Bash 入口运行在当前终端，适用于受信任的工具。包内帮助支持 `bmc tool <工具名>` 和 `bmc help tool <工具名> --usage`，包含参数、示例和使用说明。
+通用工具仓库为 `bmcshell-tool-ipmi`、`bmcshell-tool-redfish` 和 `bmcshell-tool-snmp`。SBMC 工具仓库为 `sbmc-tool-cidtool`、`sbmc-tool-smash` 和 `sbmc-tool-bssh`，CID 关联信息库为 `sbmc-library-cidmap`。CIDTool、SMASH 的清单依赖 IPMI。工具包的 Bash 入口运行在当前终端，适用于受信任的工具。包内帮助支持 `bmc tool <工具名>` 和 `bmc help tool <工具名> --usage`，包含参数、示例和使用说明。
 
 `bmc use IP` 建立目标会话。需要用户名和密码的工具可通过 `bmc_v2_auth` 或对应插件的 `--auth` 交互输入。凭据随目标切换和退出清除。2.x 自动 CID 探测与密码库匹配属于设备解析流程。
 

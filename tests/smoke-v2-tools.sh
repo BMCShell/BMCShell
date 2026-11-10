@@ -51,11 +51,8 @@ chmod +x "$scratch/bin/"*
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 source ./shell/bmcshell.sh
-shopt -s nullglob
-for kind in IPMI Redfish SSH SNMP CID SMASH; do
-    archives=("../BMCShell-$kind"/dist/*.zip)
-    [[ ${#archives[@]} == 1 ]] || { printf 'Expected one ZIP for %s.\n' "$kind" >&2; exit 2; }
-    bmc plugin install --file "${archives[0]}"
+for name in bmcshell-tool-ipmi bmcshell-tool-redfish sbmc-tool-bssh bmcshell-tool-snmp sbmc-tool-cidtool sbmc-tool-smash; do
+    bmc plugin install --file "../$name"
 done
 
 [[ $(bmc help tool ipmitool --usage) == *'二进制'* ]]
