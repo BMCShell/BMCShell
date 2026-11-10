@@ -1,0 +1,18 @@
+﻿逻辑字段,现有载体,独立环境变量,分类,生效范围,是否必需,是否敏感,状态,说明
+target.ip,BMCSHELL_CONTEXT[target.ip] / V2 _BMC_IP,BMCSHELL_TARGET_IP,会话字段,目标会话,建立目标会话必需,否,拟新增,IPv4 或 IPv6 地址；V2 兼容入口目前只接受 IPv4
+target.resolver,BMCSHELL_CONTEXT[target.resolver],BMCSHELL_TARGET_RESOLVER,会话字段,目标会话,由框架填充,否,拟新增,记录解析器名称；未配置默认解析器时为 generic
+target.model,BMCSHELL_CONTEXT[target.model],BMCSHELL_TARGET_MODEL,会话字段,目标会话,否,否,拟新增,解析器可选返回的设备型号
+oem.sbmc.cid,BMCSHELL_CONTEXT[oem.sbmc.cid],,OEM 字段,声明该字段的扩展,否,否,现有字段,SBMC CID；后续由扩展登记独立变量名
+oem.<resolver>.<field>,BMCSHELL_CONTEXT[oem.<resolver>.<field>],,OEM 字段,声明该字段的扩展,否,视字段而定,现有命名规则,当前按解析器名限制写入；每个 OEM 字段需单独登记
+auth.username,_BMCSHELL_SESSION_STATE[v2.user] / V2 _BMC_USER,BMCSHELL_AUTH_USERNAME,会话字段,声明需要的工具,按命令要求,否,拟新增,逻辑字段和变量名均为草案；当前仅 V2 兼容层使用
+auth.password,_BMCSHELL_SESSION_STATE[v2.password] / V2 _BMC_PASSWORD,,敏感字段,需要认证的工具,按命令要求,是,现有私有状态,逻辑字段名为草案；通过按需凭据接口交付
+tls.mode,_BMCSHELL_SESSION_STATE[v2.tls] / V2 _BMC_TLS,BMCSHELL_TLS_MODE,会话字段,声明需要的工具,否,否,拟新增,逻辑字段和变量名均为草案；V2 兼容层默认 verify
+snmp.version,_BMCSHELL_SESSION_STATE[v2.snmp_version] / V2 _BMC_SNMP_VERSION,BMCSHELL_SNMP_VERSION,会话字段,声明需要的工具,否,否,拟新增,逻辑字段和变量名均为草案；V2 兼容层默认 2c
+snmp.community,_BMCSHELL_SESSION_STATE[v2.snmp_community] / V2 _BMC_SNMP_COMMUNITY,,敏感字段,需要认证的 SNMP 命令,按命令要求,是,现有私有状态,逻辑字段名为草案；当前兼容层只有一个团体名字段
+shell.context,BMCSHELL_CONTEXT,BMCSHELL_CONTEXT,框架接口,终端桥接和独立工具,会话入口使用,按内容判断,现有兼容接口,聚合 JSON；过渡期为已发布工具保留
+entry.name,BMCSHELL_ENTRY,BMCSHELL_ENTRY,框架接口,独立工具与解析器进程,由框架填充,否,现有,当前调用的入口名称
+resolver.resultFile,BMCSHELL_RESULT_FILE,BMCSHELL_RESULT_FILE,框架接口,外部解析器进程,外部解析器必需,否,现有,解析器写回候选会话的文件路径
+shell.executable,BMCSHELL_EXE,BMCSHELL_EXE,启动配置,Bash 适配层,否,否,现有,覆盖主程序路径
+shell.home,BMCSHELL_HOME,BMCSHELL_HOME,启动配置,框架进程,否,否,现有,覆盖框架数据目录
+proxy.ipmi,BMCSHELL_IPMI_PROXY,BMCSHELL_IPMI_PROXY,框架接口,终端桥接,否,否,现有,当前 Bash 的 IPMI 专用 SOCKS5 地址；全局代理配置优先
+ipmitool.password,IPMI_PASSWORD,IPMI_PASSWORD,外部命令接口,IPMI 调用链,按命令要求,是,现有外部接口,兼容层调用 ipmitool 时临时设置；登记表只记录变量名
