@@ -57,11 +57,6 @@ func TestPluginCatalogCLI(t *testing.T) {
 		}
 		versions = append(versions, entries)
 	}
-	remote := filepath.Join(t.TempDir(), "remote.library.db")
-	if err := librarydb.CreateExample(remote, libID); err != nil {
-		t.Fatal(err)
-	}
-	archives["/remote.library.db"] = librarySnapshot(t, remote, "保持同步的值", "2", false)
 	theme := catalogManifest(secondThemeID, themeName, "theme", "1.0.0")
 	theme.Data = "theme.json"
 	archives["/second-theme.zip"] = archiveUpgradeFixture(t, catalogFixture(t, theme))
@@ -89,41 +84,38 @@ func TestPluginCatalogCLI(t *testing.T) {
 			t.Fatal(err)
 		}
 		published.Store(data)
-		libraryCLI(t, 0, "", "plugin", "update", "official")
+		libraryCLI(t, 0, "", "plugin", "update")
 	}
-	libraryCLI(t, 0, "", "plugin", "source", "set-official", server.URL+"/index.json")
-	libraryCLI(t, 0, "", "plugin", "source", "add", "team", server.URL+"/index.json?key=private-value")
-	if list := libraryCLI(t, 0, "", "plugin", "source", "list"); !strings.Contains(list, "official\tofficial") ||
-		!strings.Contains(list, "team\tcustom") || strings.Contains(list, "private-value") {
+	libraryCLI(t, 0, "", "setting", "--set", "plugin.source.official", server.URL+"/index.json")
+	libraryCLI(t, 0, "", "setting", "--set", "plugin.source.team", server.URL+"/index.json?key=private-value")
+	if list := libraryCLI(t, 0, "", "setting"); !strings.Contains(list, "plugin.source.official") ||
+		!strings.Contains(list, "plugin.source.team") || strings.Contains(list, "private-value") {
 		t.Fatalf("source list = %q", list)
 	}
-	publish(versions[0])
-	libraryCLI(t, 0, "", "plugin", "install", toolName, libID, "--source", "official")
+	libraryCLI(t, 0, "", "setting", "--reset", "plugin.source.team")
+	publish(append(append([]catalog.Entry{}, versions[0]...), versions[1]...))
+	if output := libraryCLI(t, 0, "", "plugin", "search", toolName); !strings.Contains(output, toolName+"@2.0.0") || strings.Contains(output, toolName+"@1.0.0") {
+		t.Fatalf("plugin search = %q", output)
+	}
+	libraryCLI(t, 0, "", "plugin", "install", toolName+"@1.0.0")
+	libraryCLI(t, 0, "", "plugin", "install", libName+"@1.0.0")
 	assertCatalogPackageVersions(t, "1.0.0", toolID, themeID, libID)
-	libraryCLI(t, 1, "", "plugin", "install", themeName, "--dry-run")
-	libraryCLI(t, 0, "2\n", "plugin", "install", themeName)
-	assertCatalogPackageVersions(t, "1.0.0", secondThemeID)
-	libraryCLI(t, 0, "", "library", "source", libName, server.URL+"/remote.library.db")
-	libraryCLI(t, 0, "y\n", "library", "refresh", libName)
+	libraryCLI(t, 1, "", "plugin", "install", themeName)
+	libraryCLI(t, 1, "", "plugin", "install", toolID)
 
 	publish(versions[1])
-	libraryCLI(t, 0, "", "plugin", "upgrade", "--dry-run")
-	assertCatalogPackageVersions(t, "1.0.0", toolID, themeID, libID)
-	libraryCLI(t, 0, "1\nn\n", "plugin", "upgrade")
-	assertCatalogPackageVersions(t, "1.0.0", toolID, themeID, libID)
-	libraryCLI(t, 0, "1\ny\n", "plugin", "upgrade")
+	libraryCLI(t, 0, "", "plugin", "upgrade", toolName)
 	assertCatalogPackageVersions(t, "2.0.0", toolID, themeID)
 	assertCatalogPackageVersions(t, "1.0.0", libID)
-	libraryCLI(t, 0, "y\n", "plugin", "upgrade", libName)
+	libraryCLI(t, 0, "", "plugin", "upgrade", libName)
 	assertCatalogPackageVersions(t, "2.0.0", libID)
-	if got := libraryCLI(t, 0, "", "library", "query", libName, "DEMO01"); strings.TrimSpace(got) != "保持同步的值" {
-		t.Fatalf("same-schema package upgrade lost active Library data: %q", got)
+	if got := libraryCLI(t, 0, "", "library", "fixture"); !strings.Contains(got, "结构版本") {
+		t.Fatalf("Library info = %q", got)
 	}
 
 	publish(versions[2])
-	libraryCLI(t, 1, "", "plugin", "upgrade", toolID, "--yes")
+	libraryCLI(t, 1, "", "plugin", "upgrade", toolName)
 	assertCatalogPackageVersions(t, "2.0.0", toolID, themeID, libID)
-	libraryCLI(t, 0, "", "plugin", "source", "remove", "team")
 }
 
 func catalogManifest(id, name, kind, version string) packages.Manifest {
@@ -157,10 +149,14 @@ func catalogFixture(t *testing.T, manifest packages.Manifest) string {
 
 func assertCatalogPackageVersions(t *testing.T, version string, ids ...string) {
 	t.Helper()
+	store, err := packages.Open(os.Getenv("BMCSHELL_HOME"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range ids {
-		out := libraryCLI(t, 0, "", "plugin", "show", id)
-		if !strings.Contains(out, "Version: "+version) || !strings.Contains(out, "Source: official") {
-			t.Fatalf("package %s = %q; want official version %s", id, out, version)
+		pkg, err := store.Find(id)
+		if err != nil || pkg.Version != version || pkg.Source != "official" {
+			t.Fatalf("package %s version/source = %s/%s, err %v; want official version %s", id, pkg.Version, pkg.Source, err, version)
 		}
 	}
 }

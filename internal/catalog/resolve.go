@@ -47,7 +47,7 @@ func versionsFor(entries []Entry, id, source string) ([]Entry, error) {
 	if source == "" && len(versions) != 0 {
 		for _, entry := range versions[1:] {
 			if entry.Source != versions[0].Source {
-				return nil, fmt.Errorf("package %s is available from %s and %s; select a source with --source", id, versions[0].Source, entry.Source)
+				return nil, fmt.Errorf("package %s is available from %s and %s; review configured sources in bmc setting", id, versions[0].Source, entry.Source)
 			}
 		}
 	}
@@ -127,7 +127,7 @@ func ResolveUpgrade(entries []Entry, installed []packages.Package, selectors []s
 			return nil, err
 		}
 		if len(versions) == 0 {
-			return nil, fmt.Errorf("no newer compatible version for %q; Library schema changes use bmc library refresh", selector)
+			return nil, fmt.Errorf("no newer compatible version for %q", selector)
 		}
 		s.targets[ids[0]] = true
 	}
@@ -202,10 +202,11 @@ func upgradeVersions(entries []Entry, current packages.Package, source string, r
 	oldSchema := schemaOf(current.Manifest)
 	var eligible []Entry
 	for _, entry := range entries {
-		if entry.ID != current.ID || entry.Type != current.Type || CompareVersion(entry.Version, current.Version) <= 0 {
+		if entry.ID != current.ID || packages.CanonicalType(entry.Type) != packages.CanonicalType(current.Type) || CompareVersion(entry.Version, current.Version) <= 0 {
 			continue
 		}
-		if requiredSchema == 0 && entry.LibrarySchemaVersion != oldSchema {
+		if requiredSchema == 0 && entry.LibrarySchemaVersion != oldSchema &&
+			(entry.LibrarySchemaVersion <= oldSchema || entry.LibraryMigrations[strconv.Itoa(oldSchema)] == "") {
 			continue
 		}
 		if requiredSchema != 0 && (entry.LibrarySchemaVersion != requiredSchema ||

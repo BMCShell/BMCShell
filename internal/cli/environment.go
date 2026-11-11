@@ -10,17 +10,17 @@ import (
 
 	"bmcshell/internal/envregistry"
 	"bmcshell/internal/packages"
+	"bmcshell/internal/proxy"
 	"bmcshell/internal/session"
-	"bmcshell/internal/settings"
 )
 
 var shellRuntimeValues = map[string]string{
-	"BMCSHELL_AUTH_USERNAME":  "BMCSHELL_BRIDGE_USERNAME",
-	"BMCSHELL_AUTH_PASSWORD":  "BMCSHELL_BRIDGE_PASSWORD",
-	"BMCSHELL_SNMP_COMMUNITY": "BMCSHELL_BRIDGE_SNMP_COMMUNITY",
-	"BMCSHELL_SNMP_VERSION":   "BMCSHELL_BRIDGE_SNMP_VERSION",
-	"BMCSHELL_TLS_MODE":       "BMCSHELL_BRIDGE_TLS",
-	"BMCSHELL_IPMI_PROXY":     "BMCSHELL_IPMI_PROXY",
+	"BMCSHELL_AUTH_USERNAME":    "BMCSHELL_BRIDGE_USERNAME",
+	"BMCSHELL_AUTH_PASSWORD":    "BMCSHELL_BRIDGE_PASSWORD",
+	"BMCSHELL_SNMP_COMMUNITY":   "BMCSHELL_BRIDGE_SNMP_COMMUNITY",
+	"BMCSHELL_SNMP_VERSION":     "BMCSHELL_BRIDGE_SNMP_VERSION",
+	"BMCSHELL_SNMP_ENTERPRISES": "BMCSHELL_SNMP_ENTERPRISES",
+	"BMCSHELL_TLS_MODE":         "BMCSHELL_BRIDGE_TLS",
 }
 
 func (a *app) environment() (envregistry.Registry, error) {
@@ -31,7 +31,53 @@ func (a *app) environment() (envregistry.Registry, error) {
 	return a.store.Environment(list)
 }
 
+var shellStatusValues = map[string]string{
+	"BMCSHELL_AUTH_USERNAME":    "BMCSHELL_BRIDGE_STATUS_USER",
+	"BMCSHELL_AUTH_PASSWORD":    "BMCSHELL_BRIDGE_STATUS_PASSWORD",
+	"BMCSHELL_SNMP_COMMUNITY":   "BMCSHELL_BRIDGE_STATUS_SNMP_COMMUNITY",
+	"BMCSHELL_SNMP_VERSION":     "BMCSHELL_BRIDGE_STATUS_SNMP_VERSION",
+	"BMCSHELL_SNMP_ENTERPRISES": "BMCSHELL_SNMP_ENTERPRISES",
+	"BMCSHELL_TLS_MODE":         "BMCSHELL_BRIDGE_STATUS_TLS",
+}
+
+func (a *app) statusEnvironment(ctx session.Context) error {
+	registry, err := a.environment()
+	if err != nil {
+		return err
+	}
+	address, err := a.proxyAddress()
+	if err != nil {
+		return err
+	}
+	for _, name := range sortedKeys(registry) {
+		field := registry[name]
+		value, ok := ctx[field.Key]
+		if source := shellStatusValues[name]; source != "" {
+			if runtimeValue := os.Getenv(source); runtimeValue != "" {
+				value, ok = runtimeValue, true
+			}
+		}
+		if !ok {
+			continue
+		}
+		if field.Sensitive {
+			value = "[redacted]"
+		} else if field.Validate(value) != nil {
+			return fmt.Errorf("invalid value for %s", name)
+		}
+		fmt.Fprintf(a.out, "%s = %s\n", name, value)
+	}
+	if address != "" {
+		fmt.Fprintf(a.out, "%s = %s\n", proxy.EnvName, address)
+	}
+	return nil
+}
+
 func environmentValues(t packages.Tool, registry envregistry.Registry, ctx session.Context, defaults map[string]string) (map[string]string, error) {
+	return environmentValuesFrom(t, registry, ctx, defaults, shellRuntimeValues)
+}
+
+func environmentValuesFrom(t packages.Tool, registry envregistry.Registry, ctx session.Context, defaults, runtime map[string]string) (map[string]string, error) {
 	values := make(map[string]string, len(t.EnvReads))
 	for _, read := range t.EnvReads {
 		field, registered := registry[read.Name]
@@ -42,7 +88,7 @@ func environmentValues(t packages.Tool, registry envregistry.Registry, ctx sessi
 		if field.Sensitive {
 			value, ok = "", false
 		}
-		if source := shellRuntimeValues[read.Name]; source != "" {
+		if source := runtime[read.Name]; source != "" {
 			if runtimeValue := os.Getenv(source); runtimeValue != "" {
 				value, ok = runtimeValue, true
 			}
@@ -111,25 +157,6 @@ func readStringMap(path string, limit int64) (map[string]string, error) {
 		values[key] = *value
 	}
 	return values, nil
-}
-
-func (a *app) importEnvironment(path string, cfg settings.Config) error {
-	registry, err := a.environment()
-	if err != nil {
-		return err
-	}
-	defaults, err := readStringMap(path, 1<<20)
-	if err != nil {
-		return err
-	}
-	for name, value := range defaults {
-		field, ok := registry[name]
-		if !ok || field.Sensitive || field.Validate(value) != nil {
-			return fmt.Errorf("invalid installation default for %q", name)
-		}
-	}
-	cfg.EnvDefaults = defaults
-	return settings.Save(a.home, cfg)
 }
 
 func applyToolWrites(path, destination string, t packages.Tool, registry envregistry.Registry, ctx session.Context) error {

@@ -72,6 +72,15 @@ func inspectFile(path, id string, immutable bool) (Snapshot, error) {
 	if err := quickCheck(tx); err != nil {
 		return Snapshot{}, err
 	}
+	if immutable {
+		var exists bool
+		if err := tx.QueryRow("SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE name = ? COLLATE NOCASE)", pendingAuditTable).Scan(&exists); err != nil {
+			return Snapshot{}, err
+		}
+		if exists {
+			return Snapshot{}, errors.New("Library release database contains working audit state")
+		}
+	}
 	return inspect(tx, id)
 }
 
@@ -96,8 +105,8 @@ func inspect(tx *sql.Tx, id string) (Snapshot, error) {
 		err := rows.Scan(&table.Name, &table.SQL)
 		return table, err
 	}, `SELECT t.name, s.sql FROM pragma_table_list AS t JOIN main.sqlite_schema AS s ON s.name = t.name
-		WHERE t.schema = 'main' AND t.type = 'table' AND s.type = 'table' AND t.name <> ?
-		AND substr(t.name, 1, 7) <> 'sqlite_' ORDER BY t.name`, metadataTable)
+		WHERE t.schema = 'main' AND t.type = 'table' AND s.type = 'table' AND t.name NOT IN (?, ?)
+		AND substr(t.name, 1, 7) <> 'sqlite_' ORDER BY t.name`, metadataTable, pendingAuditTable)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -197,6 +206,15 @@ func Validate(path, id string, contract Contract) (Snapshot, error) {
 	return snapshot, err
 }
 
+// ValidateWorking checks a live working Library, including unprojected audit state.
+func ValidateWorking(path, id string, contract Contract) (Snapshot, error) {
+	snapshot, err := Inspect(path, id)
+	if err == nil {
+		err = ValidateSnapshot(snapshot, contract)
+	}
+	return snapshot, err
+}
+
 func ValidateSnapshot(snapshot Snapshot, contract Contract) error {
 	if err := contract.Validate(); err != nil {
 		return err
@@ -208,6 +226,11 @@ func ValidateSnapshot(snapshot Snapshot, contract Contract) error {
 		table, exists := snapshot.Tables[declared.Name]
 		if !exists {
 			return fmt.Errorf("Library table %q is missing or is not an ordinary table", declared.Name)
+		}
+		for _, field := range declared.SensitiveFields {
+			if _, ok := columnNamed(table, field); !ok {
+				return fmt.Errorf("Library sensitive field %q is missing from table %q", field, table.Name)
+			}
 		}
 		if !stableKey(table, declared.Keys) {
 			return fmt.Errorf("Library table %q requires a non-null primary key or binary unique key on %s", declared.Name, strings.Join(declared.Keys, ", "))

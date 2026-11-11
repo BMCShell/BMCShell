@@ -15,7 +15,7 @@ package="$fixture/plugin with spaces"
 mkdir -- "$package"
 cleanup() {
     local source="$fixture/plugin with spaces"
-    rm -f -- "$fixture"/{defaults.json,stdout} "$source"/{bmc-package.json,help.json,changelog.json,env.csv,read.sh,write.sh,credential.sh}
+    rm -f -- "$fixture/stdout" "$source"/{bmc-package.json,help.json,changelog.json,env.csv,read.sh,write.sh,credential.sh}
     rmdir -- "$source" "$fixture"
 }
 trap cleanup EXIT
@@ -81,23 +81,24 @@ set -euo pipefail
 [[ ${BMCSHELL_AUTH_PASSWORD-} == 'test-only' && ! ${BMCSHELL_BRIDGE_PASSWORD+x} ]]
 EOF
 
-if command -v cygpath >/dev/null; then
-    package=$(cygpath -aw -- "$package")
-fi
 bmc plugin install --file "$package"
+COMP_WORDS=(bmc tool smoke_) COMP_CWORD=2
+_bmcshell_complete
+[[ " ${COMPREPLY[*]} " == *' smoke_read '* ]]
 bmc use 192.0.2.10
+if bmc use invalid-ip; then exit 1; fi
+[[ $(bmc status) == '192.0.2.10' ]]
 if smoke_credential; then exit 1; fi
 _BMCSHELL_SESSION_STATE[v2.password]=test-only
 smoke_credential
 [[ $(BMCSHELL_TARGET_IP=192.0.2.99 smoke_read 'argument with spaces') == '192.0.2.10|package default|argument with spaces' ]]
 [[ $(printf '%s\n' 'standard input' | smoke_read --stdin) == '192.0.2.10|package default|standard input' ]]
 
-defaults="$fixture/defaults.json"
-printf '%s\n' '{"SMOKE_TARGET_MODEL":"installation default"}' > "$defaults"
-if command -v cygpath >/dev/null; then
-    defaults=$(cygpath -aw -- "$defaults")
-fi
-bmc setting --import-env "$defaults"
+# Previously saved installation defaults remain readable.
+printf '%s\n' '{"env.defaults":{"SMOKE_TARGET_MODEL":"installation default"}}' > "$home/settings.json"
+status=$(bmc status --env)
+[[ $status == *'BMCSHELL_AUTH_PASSWORD = [redacted]'* && $status != *test-only* ]]
+[[ $(bmc status) == '192.0.2.10' ]]
 [[ $(smoke_read read) == '192.0.2.10|installation default|read' ]]
 if smoke_write reject > "$fixture/stdout"; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(cat "$fixture/stdout") == 'tool stdout' ]]
@@ -108,6 +109,26 @@ smoke_write > "$fixture/stdout"
 bmc use 192.0.2.20
 [[ $(smoke_read read) == '192.0.2.20|installation default|read' ]]
 if smoke_credential; then exit 1; fi
-bmc exit
 
-printf 'PASS: managed Bash environment, defaults, session write and rollback.\n'
+unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY
+http_proxy='http://previous.example:1234'
+export https_proxy=''
+export NO_PROXY='localhost,192.0.2.1'
+bmc proxy -m 127.0.0.1:1081 >/dev/null
+[[ ! ${BMCSHELL_PROXY_ADDRESS+x} && $http_proxy == http://previous.example:1234 ]]
+bmc proxy on >/dev/null
+[[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1081 && $http_proxy == socks5h://127.0.0.1:1081 ]]
+[[ $ALL_PROXY == "$http_proxy" && ! ${no_proxy+x} && ! ${NO_PROXY+x} ]]
+bmc proxy -m 127.0.0.1:1082 >/dev/null
+[[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1082 && $https_proxy == socks5h://127.0.0.1:1082 ]]
+bmc exit
+[[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1082 ]]
+bmc proxy off >/dev/null
+[[ ! ${BMCSHELL_PROXY_ADDRESS+x} && ! ${ALL_PROXY+x} && $NO_PROXY == localhost,192.0.2.1 ]]
+[[ $(declare -p http_proxy) == 'declare -- http_proxy="http://previous.example:1234"' ]]
+[[ $(declare -p https_proxy) == 'declare -x https_proxy=""' ]]
+bmc proxy on >/dev/null
+[[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1082 ]]
+bmc proxy off >/dev/null
+
+printf 'PASS: managed Bash environment, session writes, secret redaction and proxy restoration.\n'

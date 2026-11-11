@@ -79,3 +79,40 @@ func TestPluginRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestSNMPEnterprisesRegistry(t *testing.T) {
+	registry, err := LoadFramework("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, ok := registry["BMCSHELL_SNMP_ENTERPRISES"]
+	if !ok || field.Key != "snmp.enterprises" || field.Sensitive || field.FrameworkDefault != nil {
+		t.Fatalf("unexpected SNMP ENTERPRISES registration: %+v", field)
+	}
+	for _, value := range []string{"", "0", "54357", "1.3.6.1.4.1.54357"} {
+		if err := field.Validate(value); err != nil {
+			t.Errorf("value %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{".1.3", "1..3", "enterprise", "0\n", strings.Repeat("0", 257)} {
+		if err := field.Validate(value); err == nil || strings.Contains(err.Error(), value) {
+			t.Errorf("expected value-free rejection for %q, got %v", value, err)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), FrameworkFilename)
+	rows := strings.Split(doc.RegistryCSV(), "\n")
+	var oldRows []string
+	for _, row := range rows {
+		if !strings.HasPrefix(row, "\"snmp.enterprises\",") {
+			oldRows = append(oldRows, row)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(oldRows, "\n")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := LoadFramework(path)
+	if err != nil || restored["BMCSHELL_SNMP_ENTERPRISES"].Key != field.Key {
+		t.Fatalf("older registry compatibility: %v, %v", restored, err)
+	}
+}

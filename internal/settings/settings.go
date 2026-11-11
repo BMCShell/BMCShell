@@ -22,6 +22,7 @@ type Config struct {
 	DefaultResolver *Resolver         `json:"use.default_resolver,omitempty"`
 	Theme           string            `json:"theme.active,omitempty"`
 	Proxy           string            `json:"proxy.address,omitempty"`
+	ProxyPreferred  string            `json:"proxy.preferred_address,omitempty"`
 }
 
 func Load(root string) (Config, error) {
@@ -39,9 +40,12 @@ func Load(root string) (Config, error) {
 	if ref := cfg.DefaultResolver; ref != nil && (ref.ExtensionID == "" || ref.Export == "") {
 		return cfg, errors.New("settings.json: default resolver needs an extension ID and export")
 	}
-	if cfg.Proxy != "" {
-		if address, err := ProxyAddress(cfg.Proxy); err != nil || address != cfg.Proxy {
-			return cfg, errors.New("settings.json: proxy.address must be a canonical 127.0.0.1:port")
+	for _, value := range []string{cfg.Proxy, cfg.ProxyPreferred} {
+		if value == "" {
+			continue
+		}
+		if address, err := ProxyAddress(value); err != nil || address != value {
+			return cfg, errors.New("settings.json: proxy addresses must be canonical 127.0.0.1:port")
 		}
 	}
 	return cfg, nil

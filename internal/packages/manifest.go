@@ -25,12 +25,13 @@ var (
 )
 
 type Tool struct {
-	Scope     string              `json:"scope"`
-	Entry     string              `json:"entry"`
-	Runtime   string              `json:"runtime"`
-	Requires  []string            `json:"requires"`
-	EnvReads  []envregistry.Read  `json:"envReads,omitempty"`
-	EnvWrites []envregistry.Write `json:"envWrites,omitempty"`
+	Scope             string              `json:"scope"`
+	Entry             string              `json:"entry"`
+	Runtime           string              `json:"runtime"`
+	Requires          []string            `json:"requires"`
+	EnvReads          []envregistry.Read  `json:"envReads,omitempty"`
+	EnvWrites         []envregistry.Write `json:"envWrites,omitempty"`
+	ProxyCapabilities []string            `json:"proxyCapabilities,omitempty"`
 }
 
 func (t Tool) ManagedEnv() bool {
@@ -38,7 +39,8 @@ func (t Tool) ManagedEnv() bool {
 }
 
 type Resolver struct {
-	Entry string `json:"entry"`
+	Entry             string   `json:"entry"`
+	ProxyCapabilities []string `json:"proxyCapabilities,omitempty"`
 }
 
 type Provides struct {
@@ -89,6 +91,7 @@ type Manifest struct {
 	Provides           Provides                      `json:"provides"`
 	Members            []string                      `json:"members"`
 	Dependencies       map[string]string             `json:"dependencies"`
+	RepairSuggestions  string                        `json:"repairSuggestions,omitempty"`
 	SystemDependencies []SystemDependency            `json:"systemDependencies"`
 }
 
@@ -158,6 +161,9 @@ func loadPackage(root string) (Package, error) {
 }
 
 func (p Package) validateDocumentation() error {
+	if _, err := p.RepairRecords(); err != nil {
+		return err
+	}
 	for _, rel := range []string{p.Help, p.Changelog} {
 		path, err := p.File(rel)
 		if err != nil {
@@ -238,8 +244,11 @@ func (p Package) validate() error {
 				}
 			}
 		}
-	case "toolplugin":
+	case "tool", "toolplugin":
 		for name, tool := range p.Provides.Tools {
+			if err := validateProxyCapabilities(tool.ProxyCapabilities); err != nil {
+				return fmt.Errorf("tool %q: %w", name, err)
+			}
 			if name == "bmc" || !entryName.MatchString(name) || (tool.Scope != "global" && tool.Scope != "session") {
 				return fmt.Errorf("invalid tool name or scope: %q", name)
 			}
@@ -260,6 +269,9 @@ func (p Package) validate() error {
 			}
 		}
 		for name, resolver := range p.Provides.Resolvers {
+			if err := validateProxyCapabilities(resolver.ProxyCapabilities); err != nil {
+				return fmt.Errorf("resolver %q: %w", name, err)
+			}
 			if name == "generic" || !entryName.MatchString(name) {
 				return fmt.Errorf("invalid resolver name %q", name)
 			}
@@ -276,7 +288,7 @@ func (p Package) validate() error {
 	default:
 		return fmt.Errorf("unknown package type %q", p.Type)
 	}
-	if p.Type != "toolplugin" && (len(p.Provides.Tools) > 0 || len(p.Provides.Resolvers) > 0) {
+	if CanonicalType(p.Type) != "tool" && (len(p.Provides.Tools) > 0 || len(p.Provides.Resolvers) > 0) {
 		return fmt.Errorf("package %s: only toolplugins can provide commands or resolvers", p.ID)
 	}
 	if p.Type != "bundle" && len(p.Members) > 0 {
@@ -285,8 +297,19 @@ func (p Package) validate() error {
 	return nil
 }
 
+func validateProxyCapabilities(capabilities []string) error {
+	seen := make(map[string]bool, len(capabilities))
+	for _, capability := range capabilities {
+		if capability != "tcp" && capability != "udp" || seen[capability] {
+			return fmt.Errorf("invalid or repeated proxy capability %q", capability)
+		}
+		seen[capability] = true
+	}
+	return nil
+}
+
 func (p Package) validateLibraryLinks() error {
-	if p.Type != "toolplugin" && len(p.LibrarySchemas) > 0 {
+	if CanonicalType(p.Type) != "tool" && len(p.LibrarySchemas) > 0 {
 		return fmt.Errorf("package %s: only toolplugins can declare Library schema dependencies", p.ID)
 	}
 	for id, supported := range p.LibrarySchemas {

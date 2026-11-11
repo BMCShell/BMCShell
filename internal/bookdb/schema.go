@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 
+	"bmcshell/internal/envregistry"
+
 	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
@@ -28,9 +30,10 @@ type lookup struct {
 }
 
 type fieldOption struct {
-	Title  string
-	Format string
-	Width  int
+	Title         string
+	Format        string
+	Width         int
+	Substitutions map[string]string `json:"substitutions,omitempty"`
 }
 
 type metadata struct {
@@ -285,6 +288,15 @@ func (m *metadata) validate(db *sql.DB) error {
 	for field, option := range m.Options {
 		if err := m.validateFields([]string{field}); err != nil {
 			return err
+		}
+		if len(option.Substitutions) != 0 && (m.fields[field] != "TEXT" ||
+			(option.Format != "" && option.Format != "text" && option.Format != "oid")) {
+			return fmt.Errorf("substitutions require a text field, got %q", field)
+		}
+		for token, variable := range option.Substitutions {
+			if !bookToken.MatchString(token) || !envregistry.ValidName(variable) {
+				return fmt.Errorf("invalid Book substitution in %q", field)
+			}
 		}
 		if option.Width != 0 && (option.Width < 4 || option.Width > 120) {
 			return fmt.Errorf("invalid width for %q", field)

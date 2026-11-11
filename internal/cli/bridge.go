@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"bmcshell/internal/packages"
+	"bmcshell/internal/proxy"
 	"bmcshell/internal/session"
 	"bmcshell/internal/settings"
 )
@@ -61,22 +63,51 @@ func toolReady(t toolRef, ctx session.Context) error {
 	return nil
 }
 
+func toolAvailability(p packages.Package, name string) error {
+	for _, dep := range p.SystemDependencies {
+		if len(dep.RequiredBy) != 0 && !slices.Contains(dep.RequiredBy, name) {
+			continue
+		}
+		if _, err := exec.LookPath(dep.ID); err != nil {
+			return fmt.Errorf("missing dependency %s", dep.ID)
+		}
+	}
+	return nil
+}
+
 func (a *app) tool(args []string) error {
-	if len(args) == 1 && args[0] != "list" && args[0] != "-l" {
-		return a.help([]string{"tool", args[0], "--usage"})
+	const usage = "usage: bmc tool [-l|--list|-a|--all] or bmc tool <name> [-h|--help]"
+	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		if resolver, ok := strings.CutPrefix(args[0], "use@"); ok {
+			return a.help([]string{"use", resolver})
+		}
+		return a.help([]string{"tool", args[0]})
 	}
 	if len(args) > 1 {
-		return errors.New("usage: bmc tool [list|name]")
+		return errors.New(usage)
+	}
+	all, selected := false, ""
+	if len(args) == 1 {
+		switch args[0] {
+		case "-l", "--list":
+		case "-a", "--all":
+			all = true
+		default:
+			selected = args[0]
+			if strings.HasPrefix(selected, "-") {
+				return errors.New(usage)
+			}
+		}
 	}
 	ctx, err := session.Current()
 	if err != nil {
 		return err
 	}
-	list, err := a.tools()
+	list, err := a.store.List()
 	if err != nil {
 		return err
 	}
-	registry, err := a.environment()
+	registry, err := a.store.Environment(list)
 	if err != nil {
 		return err
 	}
@@ -84,16 +115,86 @@ func (a *app) tool(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range list {
-		status := "ready"
-		err := toolReady(t, ctx)
-		if err == nil && t.Spec.ManagedEnv() {
-			_, err = environmentValues(t.Spec, registry, ctx, cfg.EnvDefaults)
+	type entry struct {
+		name, scope string
+		err         error
+	}
+	groups := make(map[string][]entry)
+	for _, p := range list {
+		for _, name := range sortedKeys(p.Provides.Tools) {
+			spec := p.Provides.Tools[name]
+			err := toolAvailability(p, name)
+			if err == nil {
+				err = toolReady(toolRef{Name: name, Spec: spec, Package: p}, ctx)
+			}
+			if err == nil && spec.ManagedEnv() {
+				_, err = environmentValuesFrom(spec, registry, ctx, cfg.EnvDefaults, shellStatusValues)
+			}
+			groups[p.Name] = append(groups[p.Name], entry{name, spec.Scope, err})
 		}
-		if err != nil {
-			status = err.Error()
+		for _, name := range sortedKeys(p.Provides.Resolvers) {
+			groups[p.Name] = append(groups[p.Name], entry{"use@" + name, "resolver", toolAvailability(p, name)})
 		}
-		fmt.Fprintf(a.out, "%s\t%s\t%s\n", t.Name, t.Spec.Scope, status)
+	}
+	for _, group := range sortedKeys(groups) {
+		shown := false
+		for _, item := range groups[group] {
+			if selected != "" && item.name != selected || selected == "" && !all && item.err != nil {
+				continue
+			}
+			if !shown {
+				fmt.Fprintln(a.out, group)
+				shown = true
+			}
+			status := "ready"
+			if item.err != nil {
+				status = item.err.Error()
+			}
+			fmt.Fprintf(a.out, "  %s\t%s\t%s\n", item.name, item.scope, status)
+			if selected != "" {
+				return nil
+			}
+		}
+	}
+	if selected != "" {
+		return fmt.Errorf("unknown tool %q; see bmc tool --help", selected)
+	}
+	return nil
+}
+
+func (a *app) completion(args []string) error {
+	if len(args) != 1 {
+		return errors.New("missing completion category")
+	}
+	list, err := a.store.List()
+	if err != nil {
+		return err
+	}
+	values := make(map[string]bool)
+	for _, p := range list {
+		switch args[0] {
+		case "tools":
+			for name := range p.Provides.Tools {
+				values[name] = true
+			}
+			for name := range p.Provides.Resolvers {
+				values["use@"+name] = true
+			}
+		case "books":
+			if p.Type == "book" {
+				values[p.DataName()] = true
+			}
+		case "resolvers":
+			for name := range p.Provides.Resolvers {
+				values[name] = true
+			}
+		}
+	}
+	if args[0] == "resolvers" {
+		values["generic"] = true
+	}
+	for _, value := range sortedKeys(values) {
+		fmt.Fprintln(a.out, value)
 	}
 	return nil
 }
@@ -103,8 +204,14 @@ func (a *app) bridge(args []string) error {
 		return errors.New("missing shell bridge action")
 	}
 	switch args[0] {
+	case "history":
+		return a.history(args[1:])
 	case "proxy-address":
 		return a.proxyAddressBridge(args[1:])
+	case "proxy-config":
+		return a.proxyConfigBridge(args[1:])
+	case "completion":
+		return a.completion(args[1:])
 	case "proxy-run":
 		return a.proxyRunBridge(args[1:])
 	case "resolve":
@@ -136,6 +243,13 @@ func (a *app) bridge(args []string) error {
 		if err != nil || t.Spec.Runtime != "bash" || t.Spec.ManagedEnv() {
 			return err
 		}
+		address, err := a.proxyAddress()
+		if err != nil {
+			return err
+		}
+		if err := proxy.CheckCapabilities(address, t.Spec.ProxyCapabilities); err != nil {
+			return err
+		}
 		path, err := t.Package.File(t.Spec.Entry)
 		if err != nil {
 			return err
@@ -147,7 +261,7 @@ func (a *app) bridge(args []string) error {
 			return errors.New("bridge field needs a context field name")
 		}
 		switch args[1] {
-		case "target.ip", "target.model", "target.resolver", "oem.sbmc.cid":
+		case "target.ip", "target.model", "target.resolver", "oem.sbmc.cid", "snmp.enterprises":
 		default:
 			return fmt.Errorf("unsupported public context field %q", args[1])
 		}
@@ -201,20 +315,34 @@ func (a *app) resolve(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, err := session.Resolve(resolver, ip, extra, a.in, a.errOut)
-	if err != nil {
-		return err
+	var address string
+	if resolver.Name != "generic" {
+		address, err = a.proxyAddress()
+		if err != nil {
+			return err
+		}
 	}
 	registry, err := a.store.Environment(list)
 	if err != nil {
 		return err
 	}
+	result, err := session.Resolve(resolver, ip, extra, address, toolEnvironment(registry, true), a.in, a.errOut)
+	if err != nil {
+		return err
+	}
 	for name, field := range registry {
-		if value, ok := ctx[field.Key]; ok && (field.Sensitive || field.Validate(value) != nil) {
+		if value, ok := result.Context[field.Key]; ok && (field.Sensitive || field.Validate(value) != nil) {
 			return fmt.Errorf("resolver returned an invalid or sensitive value for %s", name)
 		}
 	}
-	return json.NewEncoder(a.out).Encode(ctx)
+	if err := json.NewEncoder(a.out).Encode(result.Context); err != nil {
+		return err
+	}
+	// Only the adapter requests and captures the private lines.
+	if result.Password != "" && os.Getenv("BMCSHELL_BRIDGE_RESOLVE_PRIVATE") == "1" {
+		_, err = fmt.Fprintln(a.out, result.Username+"\n"+result.Password)
+	}
+	return err
 }
 
 func (a *app) readyTool(name string) (toolRef, error) {
@@ -254,7 +382,14 @@ func (a *app) runTool(name string, args []string) error {
 	if err != nil {
 		return err
 	}
-	cmd.Env = append(toolEnvironment(registry, t.Spec.ManagedEnv()), "BMCSHELL_ENTRY="+name)
+	address, err := a.proxyAddress()
+	if err != nil {
+		return err
+	}
+	if err := proxy.CheckCapabilities(address, t.Spec.ProxyCapabilities); err != nil {
+		return err
+	}
+	cmd.Env = append(proxy.Environment(toolEnvironment(registry, t.Spec.ManagedEnv()), address), "BMCSHELL_ENTRY="+name)
 	ctx, err := session.Current()
 	if err != nil {
 		return err
@@ -308,9 +443,12 @@ func (a *app) prompt() error {
 	if err != nil || cfg.Theme == "" {
 		return err
 	}
-	p, err := a.findType(cfg.Theme, "theme")
+	p, err := a.store.Find(cfg.Theme)
 	if err != nil {
 		return err
+	}
+	if p.Type != "theme" {
+		return errors.New("active theme does not reference a theme package")
 	}
 	var theme struct{ Prefix string }
 	if err := readPackageJSON(p, p.Data, &theme); err != nil {

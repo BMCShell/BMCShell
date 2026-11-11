@@ -28,18 +28,36 @@ done
 for kind in book library theme tool; do
     bmc plugin install --file "$native_fixture/bmcshell-$kind-smoke"
 done
-tool_id=$(bmc plugin list | awk '$2 == "bmcshell-tool-smoke" { print $4 }')
-theme_id=$(bmc plugin list | awk '$2 == "bmcshell-theme-smoke" { print $4 }')
+fixture_id() {
+    sed -n 's/^[[:space:]]*"id": "\([^"]*\)",*$/\1/p' "$fixture/bmcshell-$1-smoke/bmc-package.json"
+}
+tool_id=$(fixture_id tool)
+[[ -n $tool_id ]]
 "$scaffold" create --name bmcshell-bundle-smoke -o "$native_fixture" --member "$tool_id"
 bmc plugin install --file "$native_fixture/bmcshell-bundle-smoke"
 source ./shell/bmcshell.sh
 
+book_id=$(fixture_id book)
+library_id=$(fixture_id library)
+theme_id=$(fixture_id theme)
+bundle_id=$(fixture_id bundle)
+[[ -f "$home/framework.db" && ! -d "$home/packages/.sets" ]]
+[[ -f "$home/books/$book_id/1.0.0/book/smoke.book.db" ]]
+[[ -f "$home/libraries/$library_id/releases/1.0.0/bmc-package.json" ]]
+for library_file in work.library.db baseline.library.db audit.jsonl; do
+    [[ -n $(find "$home/libraries/$library_id" -maxdepth 2 -path "*/gen-*/$library_file" -print -quit) ]]
+done
+[[ -f "$home/plugins/tool/$tool_id/1.0.0/bin/tool.exe" ]]
+[[ -f "$home/plugins/theme/$theme_id/1.0.0/bmc-package.json" ]]
+[[ -f "$home/plugins/bundle/$bundle_id/1.0.0/bmc-package.json" ]]
+
 [[ $(bmc_bmcshell_tool_smoke_global) == 'BMCShell global tool is ready.' ]]
 if declare -F bmc_bmcshell_tool_smoke_session >/dev/null; then exit 1; fi
-[[ $(bmc book bmcshell-book-smoke -s 示例) == *'示例条目'* ]]
-[[ $(bmc library query bmcshell-library-smoke DEMO01) == '示例设备 A' ]]
-[[ $(bmc help tool bmc_bmcshell_tool_smoke_session --usage) == *'示例'* ]]
-[[ $(bmc plugin show "$tool_id" --changelog) == *'1.0.0'* ]]
+[[ $(bmc book smoke -s 示例) == *'示例条目'* ]]
+[[ $(bmc book smoke -v) == '1.0.0' ]]
+[[ $(bmc library smoke) == *'结构版本'* ]]
+[[ $(bmc tool bmc_bmcshell_tool_smoke_session --help) == *'示例'* ]]
+[[ $(bmc plugin list tool) == *'bmcshell-tool-smoke'* ]]
 
 bmc use 192.0.2.10
 [[ $(bmc_bmcshell_tool_smoke_session) == 'Current BMC: 192.0.2.10' ]]
@@ -48,12 +66,12 @@ if bmc use invalid-ip; then
     printf 'Expected the resolver to reject an invalid target.\n' >&2
     exit 1
 fi
-[[ $(bmc status) == *'target.ip = 192.0.2.10'* ]]
+[[ $(bmc status) == '192.0.2.10' ]]
 
-bmc setting --set theme.active "$theme_id"
-[[ $(bmc bridge prompt) == '[BMC 192.0.2.10] ' ]]
+bmc setting --set theme.active bmcshell-theme-smoke
+[[ $(_bmcshell_bridge prompt) == '[BMC 192.0.2.10] ' ]]
 bmc use 192.0.2.50 --resolver generic
-[[ $(bmc status) == *'target.resolver = generic'* ]]
+[[ $(bmc status) == '192.0.2.50' ]]
 bmc exit
 if declare -F bmc_bmcshell_tool_smoke_session >/dev/null; then exit 1; fi
 [[ $(bmc status) == 'No active BMC target.' ]]

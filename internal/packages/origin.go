@@ -2,7 +2,6 @@ package packages
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,11 +33,4 @@ func readSource(root string) (string, error) {
 		return "", errors.New("invalid installed package source name")
 	}
 	return source, nil
-}
-
-func writeSource(root, source string) error {
-	if !originName.MatchString(source) {
-		return fmt.Errorf("invalid package source name %q", source)
-	}
-	return os.WriteFile(filepath.Join(root, originFile), []byte(source+"\n"), 0600)
 }

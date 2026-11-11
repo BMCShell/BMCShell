@@ -18,11 +18,11 @@ func TestThreeWayLibraryMerge(t *testing.T) {
 		"local": before["local"], "conflict": {"conflict", "remote edit"},
 		"remote": {"remote", "remote edit"}, "same": before["same"], "new": {"new", "added"},
 	}
-	changes := compareRows("records", layout, local, before, remote, false)
-	if len(changes) != 4 || !changes[0].Conflict || changes[0].UseRemote ||
+	changes := compareRows("records", layout, local, before, remote)
+	if len(changes) != 4 || len(changes[0].Fields) != 1 || !changes[0].Fields[0].Conflict || changes[0].Fields[0].UseRemote ||
 		changes[1].Remote != nil || !changes[1].UseRemote ||
 		changes[2].Local != nil || !changes[2].UseRemote ||
-		changes[3].Key[0] != "remote" || !changes[3].UseRemote {
+		changes[3].Key[0] != "remote" || len(changes[3].Fields) != 1 || !changes[3].Fields[0].UseRemote {
 		t.Fatalf("unexpected merge plan: %#v", changes)
 	}
 	if mergeKey([]any{int64(1e18)}, layout) != mergeKey([]any{float64(1e18)}, layout) {

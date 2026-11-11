@@ -21,7 +21,7 @@ import (
 var ipmiOption = regexp.MustCompile(`^-[46hVvcgsKYZ]+$|^-[46hVvcgsKYZ]*[odCLAtTmzSlbBekyORND].*$`)
 
 // Run executes a V2-compatible SOCKS5 relay using a configured local endpoint.
-// ssh relays the supplied streams. ipmi and snmp run the supplied native
+// ssh relays the supplied streams. IPMI and SNMP modes run the supplied
 // executable with its target replaced by a temporary local UDP listener.
 func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	proxy, err := proxyAddress(address)
@@ -42,11 +42,30 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 			return err
 		}
 		return relayTCP(proxy, target, stdin, stdout)
+	case "ipmi-native":
+		if len(args) < 4 || !filepath.IsAbs(args[3]) {
+			return errors.New("usage: proxy ipmi-native <host> <port> <family> <absolute executable> [args...]")
+		}
+		port, err := parseIPMIPort(args[1])
+		if err != nil {
+			return err
+		}
+		target, err := ipmiEndpoint(args[0], port, args[2])
+		if err != nil {
+			return err
+		}
+		// The wrapper has already removed the native host and port options.
+		return relayUDP(proxy, target, func(localPort uint16) *exec.Cmd {
+			argv := append([]string{"-H", udpLoopback(target).String(), "-p", strconv.Itoa(int(localPort))}, args[4:]...)
+			cmd := exec.Command(args[3], argv...)
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+			return cmd
+		})
 	case "ipmi", "snmp":
 		if len(args) < 3 || !filepath.IsAbs(args[1]) {
 			return fmt.Errorf("proxy %s requires a target, absolute executable path and tool arguments", mode)
 		}
-		var port uint16 = 623
+		var port uint16 = defaultIPMIPort
 		arguments := args[3:]
 		insert, localFormat := 5, "%d"
 		if mode == "ipmi" {
@@ -117,8 +136,15 @@ func relayTCP(proxy, target netip.AddrPort, stdin io.Reader, stdout io.Writer) e
 	return err
 }
 
+func udpLoopback(target netip.AddrPort) netip.Addr {
+	if target.Addr().Is6() {
+		return netip.IPv6Loopback()
+	}
+	return loopback
+}
+
 func relayUDP(proxy, target netip.AddrPort, buildCommand func(uint16) *exec.Cmd) error {
-	local, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(loopback, 0)))
+	local, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(udpLoopback(target), 0)))
 	if err != nil {
 		return err
 	}

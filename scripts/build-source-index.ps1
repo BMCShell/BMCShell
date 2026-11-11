@@ -40,7 +40,7 @@ foreach ($artifact in $artifacts) {
 
     if ($manifest.schema -ne 1 -or $manifest.coreApi -lt 1 -or
         $manifest.id -cnotmatch '\A[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\z' -or
-        $manifest.type -cnotin 'book', 'library', 'theme', 'toolplugin', 'bundle' -or
+        $manifest.type -cnotin 'book', 'library', 'theme', 'tool', 'toolplugin', 'bundle' -or
         $manifest.version -cnotmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z' -or
         [string]::IsNullOrWhiteSpace($manifest.name)) {
         throw "Invalid package metadata in '$path'."

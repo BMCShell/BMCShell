@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "suggestions": [
+    {
+      "dependency": "curl",
+      "suggestion": "在 MSYS2 中可安装 curl。其他终端可通过其工具管理方式安装 curl，并确认命令在 PATH 中。",
+      "platform": "windows-amd64",
+      "manager": "msys2",
+      "package": "msys/curl"
+    },
+    {
+      "dependency": "ssh",
+      "suggestion": "在 MSYS2 中可安装 OpenSSH。其他终端可启用其 OpenSSH 客户端，并确认 ssh 在 PATH 中。",
+      "platform": "windows-amd64",
+      "manager": "msys2",
+      "package": "msys/openssh"
+    },
+    {
+      "dependency": "ipmitool",
+      "suggestion": "安装当前终端可运行的 ipmitool，将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpget",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpgetnext",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpwalk",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpbulkwalk",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpbulkget",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    },
+    {
+      "dependency": "snmpset",
+      "suggestion": "安装当前终端可运行的 Net-SNMP 客户端工具，并将其可执行文件所在目录加入 PATH。"
+    }
+  ]
+}

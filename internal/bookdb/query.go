@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"bmcshell/internal/envregistry"
 )
 
 const bodyLimit = 2 << 20
@@ -22,6 +25,23 @@ type operation struct {
 
 // Query renders a list, literal search, or metadata-defined detail lookup.
 func Query(out io.Writer, path string, args []string, cid string) error {
+	registry, err := envregistry.LoadFramework("")
+	if err != nil {
+		return err
+	}
+	values := make(map[string]string)
+	for name, field := range registry {
+		if !field.Sensitive {
+			if value, present := os.LookupEnv(name); present {
+				values[name] = value
+			}
+		}
+	}
+	return QueryWithEnvironment(out, path, args, cid, registry, values)
+}
+
+// QueryWithEnvironment renders only the registered public values supplied by the caller.
+func QueryWithEnvironment(out io.Writer, path string, args []string, cid string, registry envregistry.Registry, values map[string]string) error {
 	db, meta, err := openBook(path)
 	if err != nil {
 		return err
@@ -31,8 +51,11 @@ func Query(out io.Writer, path string, args []string, cid string) error {
 		meta.renderHelp(out)
 		return nil
 	}
-	enterprise := oidPrefix(cid)
-	op, err := meta.parse(args, enterprise)
+	rendering, err := meta.rendering(cid, registry, values)
+	if err != nil {
+		return err
+	}
+	op, err := meta.parse(args, rendering.enterprise)
 	if err != nil {
 		return err
 	}
@@ -65,7 +88,10 @@ func Query(out io.Writer, path string, args []string, cid string) error {
 		}
 		shown := make([]string, len(meta.List))
 		for i, field := range meta.List {
-			shown[i] = meta.display(field, values[i], enterprise)
+			shown[i], err = meta.display(field, values[i], rendering)
+			if err != nil {
+				return err
+			}
 		}
 		if !op.detail {
 			meta.writeListRow(out, shown)
@@ -75,12 +101,16 @@ func Query(out io.Writer, path string, args []string, cid string) error {
 		if length > bodyLimit {
 			return errors.New("book entry body exceeds 2 MiB")
 		}
-		for i, field := range meta.List {
-			fmt.Fprintf(out, "%s: %s\n", meta.title(field), shown[i])
-		}
 		body, _ := values[len(meta.List)].(string)
 		if body == "" {
 			body = "暂无详细内容"
+		}
+		body, err = rendering.apply(meta.Body, meta.Options[meta.Body].Format, body)
+		if err != nil {
+			return err
+		}
+		for i, field := range meta.List {
+			fmt.Fprintf(out, "%s: %s\n", meta.title(field), shown[i])
 		}
 		fmt.Fprintln(out, safe(body))
 		fmt.Fprintln(out)
@@ -150,13 +180,21 @@ func (m metadata) parseLookup(args []string, enterprise string) (operation, erro
 		if len(rule.Fields) != len(values) || (option == "" && !rule.Positional) || (option != "" && rule.Option != option) {
 			continue
 		}
-		parts, bound := make([]string, len(values)), make([]any, len(values))
+		parts, bound := make([]string, 0, len(values)), make([]any, 0, len(values))
 		for i, field := range rule.Fields {
 			value, err := m.lookupValue(field, values[i], enterprise)
 			if err != nil {
 				return operation{}, err
 			}
-			parts[i], bound[i] = quote(field)+" = ? COLLATE NOCASE", value
+			comparison := quote(field) + " = ? COLLATE NOCASE"
+			if m.Options[field].Format == "oid" {
+				canonical := swapOIDPrefix(value.(string), "enterprises", enterpriseOIDTemplate)
+				parts = append(parts, "("+comparison+" OR "+comparison+" OR "+comparison+")")
+				bound = append(bound, value, canonical, values[i])
+			} else {
+				parts = append(parts, comparison)
+				bound = append(bound, value)
+			}
 		}
 		return operation{where: " WHERE " + strings.Join(parts, " AND "), values: bound, detail: true}, nil
 	}
@@ -187,10 +225,9 @@ func (m metadata) lookupValue(field, value, enterprise string) (any, error) {
 			}
 		}
 	case "oid":
-		if enterprise != "" {
-			value = strings.Replace(value, enterprise, "enterprises", 1)
-		}
-		return value, nil
+		value = swapOIDPrefix(value, enterpriseOIDTemplate, "enterprises")
+		value = swapOIDPrefix(value, canonicalEnterprisePrefix(enterprise), "enterprises")
+		return swapOIDPrefix(value, enterprise, "enterprises"), nil
 	default:
 		return value, nil
 	}
@@ -221,33 +258,30 @@ func (m metadata) title(field string) string {
 	return field
 }
 
-func (m metadata) display(field string, value any, enterprise string) string {
+func (m metadata) display(field string, value any, rendering bookRendering) (string, error) {
 	n, integer := value.(int64)
 	switch m.Options[field].Format {
 	case "support":
 		if !integer {
-			return "未知"
+			return "未知", nil
 		}
 		if n == 1 {
-			return "支持"
+			return "支持", nil
 		}
 		if n == 0 {
-			return "不支持"
+			return "不支持", nil
 		}
-		return "未知"
+		return "未知", nil
 	case "hex8":
 		if integer && n >= 0 && n <= 255 {
-			return fmt.Sprintf("0x%02x", n)
+			return fmt.Sprintf("0x%02x", n), nil
 		}
 	}
 	if value == nil {
-		return "-"
+		return "-", nil
 	}
-	text := safe(fmt.Sprint(value))
-	if m.Options[field].Format == "oid" && enterprise != "" {
-		text = strings.Replace(text, "enterprises", enterprise, 1)
-	}
-	return text
+	text, err := rendering.apply(field, m.Options[field].Format, fmt.Sprint(value))
+	return safe(text), err
 }
 
 func oidPrefix(cid string) string {

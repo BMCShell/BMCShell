@@ -3,7 +3,6 @@ package packages
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,8 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"sort"
+	"strconv"
 
 	"bmcshell/internal/librarydb"
 )
@@ -31,10 +32,12 @@ type activeSet struct {
 type Upgrade struct {
 	storeDir     string
 	stage        string
-	from         string
 	before       []Package
+	damaged      []PackageDamage
+	repaired     map[string]bool
 	after        []Package
 	changed      map[string]bool
+	skipped      map[string]error
 	beforeDigest string
 	afterDigest  string
 	general      bool
@@ -43,21 +46,42 @@ type Upgrade struct {
 func (u *Upgrade) Packages() []Package         { return slices.Clone(u.after) }
 func (u *Upgrade) OriginalPackages() []Package { return slices.Clone(u.before) }
 
-// SetSources binds changed packages to their verified catalog sources in the staged set.
+func (u *Upgrade) SkippedLibraryUpdates() []error {
+	var skipped []error
+	for _, p := range u.before {
+		if err := u.skipped[p.ID]; err != nil {
+			skipped = append(skipped, err)
+		}
+	}
+	return skipped
+}
+
+func (u *Upgrade) ChangedPackages() []Package {
+	var changed []Package
+	for _, p := range u.after {
+		if u.changed[p.ID] {
+			changed = append(changed, p)
+		}
+	}
+	return changed
+}
+
+// SetSources binds changed packages to their verified catalog sources.
 func (u *Upgrade) SetSources(sources map[string]string) error {
 	if u.stage == "" {
 		return errors.New("no prepared package set")
 	}
 	for id, source := range sources {
+		if u.skipped[id] != nil {
+			continue
+		}
 		if !u.changed[id] || !originName.MatchString(source) {
 			return fmt.Errorf("invalid source binding for package %s", id)
 		}
 	}
 	for i, p := range u.after {
-		if source := sources[p.ID]; source != "" {
-			if err := writeSource(p.Root, source); err != nil {
-				return err
-			}
+		if source := sources[p.ID]; source != "" && u.changed[p.ID] {
+
 			u.after[i].Source = source
 		}
 	}
@@ -85,45 +109,6 @@ func (s *Store) setPath(name string) string {
 	return filepath.Join(s.dir, ".sets", name)
 }
 
-func (s *Store) readActiveSet() (activeSet, error) {
-	path := filepath.Join(s.dir, ".active-set")
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return activeSet{}, nil
-	}
-	if err != nil {
-		return activeSet{}, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > 4096 {
-		return activeSet{}, errors.New("invalid active package-set marker")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return activeSet{}, err
-	}
-	var set *activeSet
-	if err := json.Unmarshal(data, &set); err != nil {
-		return activeSet{}, fmt.Errorf("invalid active package-set marker: %w", err)
-	}
-	if set == nil {
-		return activeSet{}, errors.New("invalid active package-set marker")
-	}
-	if set.Active != "" {
-		if err := s.checkSetDirectory(set.Active); err != nil {
-			return activeSet{}, err
-		}
-	}
-	if set.Previous != nil {
-		if *set.Previous == set.Active || !packageID.MatchString(set.Group) || set.Digest == "" || set.PreviousDigest == "" || len(set.Checkpoint) > 256 {
-			return activeSet{}, errors.New("invalid package rollback marker")
-		}
-		if *set.Previous != "" && !setName.MatchString(*set.Previous) {
-			return activeSet{}, errors.New("invalid previous package-set name")
-		}
-	}
-	return *set, nil
-}
-
 func (s *Store) checkSetDirectory(name string) error {
 	if !setName.MatchString(name) {
 		return fmt.Errorf("invalid package-set name %q", name)
@@ -140,32 +125,12 @@ func (s *Store) checkSetDirectory(name string) error {
 	return nil
 }
 
-func (s *Store) writeActiveSet(set activeSet) error {
-	f, err := os.CreateTemp(s.dir, ".active-set-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	err = json.NewEncoder(f).Encode(set)
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(f.Name(), filepath.Join(s.dir, ".active-set"))
-}
-
-// PrepareUpgrade builds a complete candidate package set without activating it.
+// PrepareUpgrade validates a coordinated change to already installed packages.
 func (s *Store) PrepareUpgrade(sources []string) (*Upgrade, error) {
 	return s.prepareChanges(sources, nil, false)
 }
 
-// PrepareChanges stages catalog installs and ordinary upgrades as one package set.
+// PrepareChanges stages the changed payloads and validates the resulting selection.
 func (s *Store) PrepareChanges(sources []string, expected []Package) (*Upgrade, error) {
 	return s.prepareChanges(sources, expected, true)
 }
@@ -179,35 +144,34 @@ func (s *Store) prepareChanges(sources []string, expected []Package, general boo
 		return nil, err
 	}
 	defer unlock()
-	set, err := s.readActiveSet()
+	before, damaged, err := s.Inventory()
 	if err != nil {
 		return nil, err
 	}
-	before, err := listSet(s.setPath(set.Active))
-	if err != nil {
+	if err := publishableDamages(damaged); err != nil {
 		return nil, err
 	}
-	if general && !reflect.DeepEqual(before, expected) {
+	if !general && len(damaged) != 0 {
+		return nil, damaged[0]
+	}
+	available := before
+	if len(damaged) != 0 {
+		available = availablePackages(before)
+	}
+	if general && !reflect.DeepEqual(available, expected) {
 		return nil, errors.New("installed packages changed; resolve the catalog plan again")
 	}
 	digest, err := packageSetDigest(before)
 	if err != nil {
 		return nil, err
 	}
-	sets := filepath.Join(s.dir, ".sets")
-	if err := os.MkdirAll(sets, 0700); err != nil {
-		return nil, err
-	}
-	if info, err := os.Lstat(sets); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("invalid package-set directory %q", sets)
-	}
-	stage, err := os.MkdirTemp(sets, "set-")
+	stage, err := os.MkdirTemp(filepath.Dir(s.dir), ".plugin-stage-")
 	if err != nil {
 		return nil, err
 	}
 	u := &Upgrade{
-		storeDir: s.dir, stage: stage, from: set.Active,
-		before: before, beforeDigest: digest, changed: make(map[string]bool), general: general,
+		storeDir: s.dir, stage: stage, before: before, beforeDigest: digest, damaged: damaged,
+		changed: make(map[string]bool), repaired: make(map[string]bool), general: general,
 	}
 	if err := s.populateUpgrade(u, sources); err != nil {
 		return nil, errors.Join(err, u.Close())
@@ -221,7 +185,7 @@ func (s *Store) populateUpgrade(u *Upgrade, sources []string) error {
 		installed[p.ID] = p
 	}
 	for _, source := range sources {
-		root, err := os.MkdirTemp(u.stage, ".incoming-")
+		root, err := os.MkdirTemp(u.stage, "incoming-")
 		if err != nil {
 			return err
 		}
@@ -230,59 +194,85 @@ func (s *Store) populateUpgrade(u *Upgrade, sources []string) error {
 			return fmt.Errorf("upgrade package %q: %w", source, err)
 		}
 		old, exists := installed[p.ID]
+		repair, err := repairSelectedRelease(p, u.damaged)
+		if err != nil {
+			return err
+		}
+		if repair {
+			u.repaired[p.ID] = true
+			for _, issue := range u.damaged {
+				if issue.Package.ID == p.ID && originName.MatchString(issue.Package.Source) {
+					p.Source = issue.Package.Source
+					break
+				}
+			}
+		}
 		if !exists && !u.general {
 			return fmt.Errorf("package %s is not installed", p.ID)
 		}
-		if u.changed[p.ID] || exists && (p.Type != old.Type || p.Version == old.Version) {
+		if u.general && exists && !u.changed[p.ID] && p.Type == "library" && old.Type == "library" && p.Version == old.Version {
+			old.Source = ""
+			previous, err := packageSetDigest([]Package{old})
+			if err != nil {
+				return err
+			}
+			incoming, err := packageSetDigest([]Package{p})
+			if err != nil {
+				return err
+			}
+			if previous != incoming {
+				return fmt.Errorf("Library %s %s has different contents; publish a new version", p.Name, p.Version)
+			}
+			continue
+		}
+		if u.changed[p.ID] || u.skipped[p.ID] != nil || exists && (CanonicalType(p.Type) != CanonicalType(old.Type) || p.Version == old.Version) {
 			return fmt.Errorf("changed package %s must appear once, preserve its type, and change its installed version", p.ID)
 		}
 		if u.general && exists && p.Type == "library" {
 			if err := checkLibraryUpdate(old, p); err != nil {
-				return err
-			}
-		}
-		if old.Source != "" {
-			if err := writeSource(root, old.Source); err != nil {
-				return err
-			}
-		}
-		if err := os.Rename(root, filepath.Join(u.stage, p.ID)); err != nil {
-			return err
-		}
-		u.changed[p.ID] = true
-	}
-	for _, p := range u.before {
-		if !u.changed[p.ID] {
-			root := filepath.Join(u.stage, p.ID)
-			if err := copyPackageDirectory(p.Root, root, true); err != nil {
-				return err
-			}
-			if p.Source != "" {
-				if err := writeSource(root, p.Source); err != nil {
+				var mismatch *libraryUpdateConflict
+				if len(sources) == 1 || !errors.As(err, &mismatch) {
 					return err
 				}
+				if u.skipped == nil {
+					u.skipped = make(map[string]error)
+				}
+				u.skipped[p.ID] = err
+				continue
 			}
 		}
+		if exists {
+			p.Source = old.Source
+		}
+		installed[p.ID] = p
+		u.changed[p.ID] = true
 	}
-	after, err := listSet(u.stage)
-	if err != nil {
-		return err
+	for _, p := range installed {
+		u.after = append(u.after, p)
 	}
-	if err := s.checkSet(after); err != nil {
-		return err
+	sort.Slice(u.after, func(i, j int) bool { return u.after[i].ID < u.after[j].ID })
+	if err := s.checkSet(u.after); err != nil {
+		return errors.Join(append(u.SkippedLibraryUpdates(), err)...)
 	}
-	u.after = after
-	u.afterDigest, err = packageSetDigest(after)
+	var err error
+	u.afterDigest, err = packageSetDigest(u.after)
 	return err
 }
 
+type libraryUpdateConflict struct{ name string }
+
+func (e *libraryUpdateConflict) Error() string {
+	return fmt.Sprintf("跳过 Library %s：新版包与现有库的结构不兼容，请备份工作库并检查发布包的更新规则", e.name)
+}
+
 func checkLibraryUpdate(old, next Package) error {
-	mismatch := fmt.Errorf("Library %s changes its schema; use bmc library refresh for a coordinated upgrade", old.Name)
-	if !reflect.DeepEqual(old.Library, next.Library) {
-		return mismatch
-	}
+	mismatch := &libraryUpdateConflict{name: old.Name}
 	if old.Library == nil {
+		// The CLI validates and stages the legacy JSON-to-SQLite transition.
 		return nil
+	}
+	if next.Library == nil {
+		return mismatch
 	}
 	inspect := func(p Package) (librarydb.Snapshot, error) {
 		path, err := p.File(p.Data)
@@ -299,10 +289,13 @@ func checkLibraryUpdate(old, next Package) error {
 	if err != nil {
 		return err
 	}
-	if len(librarydb.StructureDifferences(previous, incoming)) != 0 {
-		return mismatch
+	if old.Library.StructurallyEqual(*next.Library) && len(librarydb.StructureDifferences(previous, incoming)) == 0 {
+		return nil
 	}
-	return nil
+	if incoming.SchemaVersion > previous.SchemaVersion && next.LibraryMigrations[strconv.Itoa(previous.SchemaVersion)] != "" {
+		return nil
+	}
+	return mismatch
 }
 
 func (s *Store) checkSet(list []Package) error {
@@ -316,7 +309,7 @@ func (s *Store) checkSet(list []Package) error {
 	return err
 }
 
-// CommitUpgrade publishes the new set after revalidating the inputs and running the data commit.
+// CommitUpgrade retains the previous selection and its checkpoint for rollback.
 func (s *Store) CommitUpgrade(u *Upgrade, groupID, checkpoint string, beforeCommit func() error) error {
 	if u == nil || u.general || !u.changed[groupID] {
 		return errors.New("upgrade must belong to this store and include the selected Library")
@@ -327,19 +320,23 @@ func (s *Store) CommitUpgrade(u *Upgrade, groupID, checkpoint string, beforeComm
 	if p, err := findPackage(u.after, groupID); err != nil || p.Library == nil {
 		return errors.New("upgrade group must be a SQLite Library package")
 	}
-	return s.commitPrepared(u, groupID, checkpoint, beforeCommit)
+	return s.commitPrepared(u, groupID, checkpoint, nil, beforeCommit)
 }
 
-// CommitChanges activates a catalog package set after any compatible Library data
-// has been prepared by the caller.
 func (s *Store) CommitChanges(u *Upgrade, beforeCommit func() error) error {
+	return s.CommitChangesWithLibraries(u, nil, beforeCommit)
+}
+
+// CommitChangesWithLibraries activates all package versions and prepared Library
+// generations in one metadata transaction.
+func (s *Store) CommitChangesWithLibraries(u *Upgrade, activations []LibraryActivation, beforeCommit func() error) error {
 	if u == nil || !u.general {
 		return errors.New("expected a prepared catalog package change")
 	}
-	return s.commitPrepared(u, "", "", beforeCommit)
+	return s.commitPrepared(u, "", "", activations, beforeCommit)
 }
 
-func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, beforeCommit func() error) error {
+func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, activations []LibraryActivation, beforeCommit func() error) error {
 	if u.storeDir != s.dir || u.stage == "" {
 		return errors.New("prepared package set does not belong to this store")
 	}
@@ -348,17 +345,20 @@ func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, beforeCom
 		return err
 	}
 	defer unlock()
-	set, err := s.readActiveSet()
+	current, damaged, err := s.Inventory()
 	if err != nil {
 		return err
 	}
-	if set.Active != u.from {
-		return errors.New("active package set changed during upgrade")
+	if !sameDamagedSelections(damaged, u.damaged) {
+		return errors.New("damaged package selections changed; prepare the package change again")
 	}
-	if _, err := s.verifySet(s.setPath(set.Active), u.beforeDigest); err != nil {
+	if err := verifyPackageDigest(current, u.beforeDigest); err != nil {
 		return err
 	}
-	if _, err := s.verifySet(u.stage, u.afterDigest); err != nil {
+	if err := s.verifyPackages(u.after, u.afterDigest); err != nil {
+		return err
+	}
+	if err := validateLibrarySelections(u.after, activations); err != nil {
 		return err
 	}
 	if beforeCommit != nil {
@@ -366,15 +366,27 @@ func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, beforeCom
 			return err
 		}
 	}
-	next := activeSet{Active: filepath.Base(u.stage)}
+	var rollback *registryRollback
 	if groupID != "" {
-		next.Previous, next.Group = &set.Active, groupID
-		next.Digest, next.PreviousDigest, next.Checkpoint = u.afterDigest, u.beforeDigest, checkpoint
+		previous, err := s.publishPackages(current)
+		if err != nil {
+			return err
+		}
+		rollback = &registryRollback{
+			Group: groupID, Checkpoint: checkpoint, CurrentDigest: u.afterDigest,
+			PreviousDigest: u.beforeDigest, Previous: previous,
+		}
 	}
-	if err := s.writeActiveSet(next); err != nil {
+	entries, err := s.publishSelections(u.after, u.damaged, u.repaired)
+	if err != nil {
 		return err
 	}
-	u.stage = "" // Published sets remain available for rollback.
+	if err := s.writeRegistry(entries, activations, rollback, false); err != nil {
+		return err
+	}
+	// The database now owns the selection. A failed cleanup cannot undo it.
+	_ = u.Close()
+	u.stage = ""
 	return nil
 }
 
@@ -385,6 +397,38 @@ func (s *Store) RollbackUpgrade(groupID string, beforeCommit func(previous Packa
 		return err
 	}
 	defer unlock()
+	_, registered, err := s.registeredPackages()
+	if err != nil {
+		return err
+	}
+	if !registered {
+		return s.rollbackLegacy(groupID, beforeCommit)
+	}
+	rollback, err := s.readRegistryRollback()
+	if err != nil {
+		return err
+	}
+	if rollback == nil || rollback.Group != groupID {
+		return fmt.Errorf("no current package rollback belongs to Library %s", groupID)
+	}
+	current, err := s.List()
+	if err != nil {
+		return err
+	}
+	if err := s.verifyPackages(current, rollback.CurrentDigest); err != nil {
+		return err
+	}
+	previous, err := s.loadRegisteredPackages(rollback.Previous)
+	if err != nil {
+		return err
+	}
+	if err := s.verifyPackages(previous, rollback.PreviousDigest); err != nil {
+		return err
+	}
+	return s.commitRollback(previous, groupID, rollback.Checkpoint, beforeCommit)
+}
+
+func (s *Store) rollbackLegacy(groupID string, beforeCommit func(previous Package, checkpoint string) error) error {
 	set, err := s.readActiveSet()
 	if err != nil {
 		return err
@@ -397,38 +441,56 @@ func (s *Store) RollbackUpgrade(groupID string, beforeCommit func(previous Packa
 			return err
 		}
 	}
-	if _, err := s.verifySet(s.setPath(set.Active), set.Digest); err != nil {
-		return err
-	}
-	previous, err := s.verifySet(s.setPath(*set.Previous), set.PreviousDigest)
+	current, err := listSet(s.setPath(set.Active))
 	if err != nil {
 		return err
 	}
+	if err := s.verifyPackages(current, set.Digest); err != nil {
+		return err
+	}
+	previous, err := listSet(s.setPath(*set.Previous))
+	if err != nil {
+		return err
+	}
+	if err := s.verifyPackages(previous, set.PreviousDigest); err != nil {
+		return err
+	}
+	return s.commitRollback(previous, groupID, set.Checkpoint, beforeCommit)
+}
+
+func (s *Store) commitRollback(previous []Package, groupID, checkpoint string, beforeCommit func(Package, string) error) error {
 	if beforeCommit != nil {
 		p, err := findPackage(previous, groupID)
 		if err != nil || p.ID != groupID {
 			return fmt.Errorf("previous package set does not contain Library %s", groupID)
 		}
-		if err := beforeCommit(p, set.Checkpoint); err != nil {
+		if err := beforeCommit(p, checkpoint); err != nil {
 			return err
 		}
 	}
-	return s.writeActiveSet(activeSet{Active: *set.Previous})
+	entries, err := s.publishPackages(previous)
+	if err != nil {
+		return err
+	}
+	return s.writeRegistry(entries, nil, nil, false)
 }
 
-func (s *Store) verifySet(root, expected string) ([]Package, error) {
-	list, err := listSet(root)
-	if err != nil {
-		return nil, err
+func (s *Store) verifyPackages(list []Package, expected string) error {
+	if err := verifyPackageDigest(list, expected); err != nil {
+		return err
 	}
+	return s.checkSet(list)
+}
+
+func verifyPackageDigest(list []Package, expected string) error {
 	digest, err := packageSetDigest(list)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if digest != expected {
-		return nil, errors.New("package-set contents changed; prepare the upgrade again")
+		return errors.New("package-set contents changed; prepare the upgrade again")
 	}
-	return list, s.checkSet(list)
+	return nil
 }
 
 func packageSetDigest(list []Package) (string, error) {

@@ -135,11 +135,11 @@ func authorizeMigration(action sqlite3.AuthorizerActionCode, first, second, _, _
 		sqlite3.AUTH_CREATE_VTABLE, sqlite3.AUTH_DROP_VTABLE:
 		return sqlite3.AUTH_DENY
 	case sqlite3.AUTH_INSERT, sqlite3.AUTH_DELETE, sqlite3.AUTH_UPDATE, sqlite3.AUTH_DROP_TABLE:
-		if strings.EqualFold(first, metadataTable) {
+		if strings.EqualFold(first, metadataTable) || strings.EqualFold(first, pendingAuditTable) {
 			return sqlite3.AUTH_DENY
 		}
 	case sqlite3.AUTH_ALTER_TABLE, sqlite3.AUTH_CREATE_TRIGGER, sqlite3.AUTH_CREATE_TEMP_TRIGGER:
-		if strings.EqualFold(second, metadataTable) {
+		if strings.EqualFold(second, metadataTable) || strings.EqualFold(second, pendingAuditTable) {
 			return sqlite3.AUTH_DENY
 		}
 	case sqlite3.AUTH_FUNCTION:

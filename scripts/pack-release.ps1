@@ -2,11 +2,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidatePattern('\A[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z')]
+    [ValidateLength(1, 128)]
+    [ValidatePattern('\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z')]
     [string] $Version,
 
-    [Parameter(Mandatory)] [string] $Binary,
-    [Parameter(Mandatory)] [string] $ShellBridge,
+    [string] $Binary = (Join-Path $PSScriptRoot '../build/BMCShell.exe'),
+    [string] $ShellBridge = (Join-Path $PSScriptRoot '../shell/bmcshell.sh'),
     [string] $Scaffold,
     [string] $OutputDirectory = (Join-Path $PSScriptRoot '../dist')
 )
@@ -27,7 +28,13 @@ function Write-ReleaseZip([string] $Path, [hashtable[]] $Files) {
         $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
             foreach ($file in $Files) {
-                $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.Source, $file.Entry)
+                if ($file.ContainsKey('Text')) {
+                    $entry = $zip.CreateEntry($file.Entry)
+                    $writer = [IO.StreamWriter]::new($entry.Open(), [Text.UTF8Encoding]::new($false))
+                    try { $writer.Write($file.Text) } finally { $writer.Dispose() }
+                } else {
+                    $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.Source, $file.Entry)
+                }
             }
         } finally {
             $zip.Dispose()
@@ -58,34 +65,63 @@ function Assert-WindowsX64([string] $Path) {
     }
 }
 
+function Assert-ReleaseVersion([string] $Path, [string] $ExpectedVersion) {
+    $info = [Diagnostics.ProcessStartInfo]::new($Path)
+    $info.ArgumentList.Add('--version')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (!$process.WaitForExit(10000)) {
+            $process.Kill($true)
+            throw 'BMCShell.exe did not report its version within 10 seconds.'
+        }
+        $reported = $stdout.GetAwaiter().GetResult().Trim()
+        $null = $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or $reported -cne "BMCShell $ExpectedVersion") {
+            throw "Expected BMCShell.exe to report 'BMCShell $ExpectedVersion'. Rebuild the executable with the release version."
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 $repo = Split-Path -Parent $PSScriptRoot
 $platform = 'windows-amd64'
 $binaryPath = Resolve-ReleaseFile $Binary
-Assert-WindowsX64 $binaryPath
+$releaseRoot = "BMCShell/bin/releases/$Version"
+$coreFile = @{ Entry = "$releaseRoot/BMCShell.exe" }
 $files = @(
-    @{ Source = $binaryPath; Entry = 'BMCShell/BMCShell.exe' }
-    @{ Source = (Resolve-ReleaseFile $ShellBridge); Entry = 'BMCShell/shell/bmcshell.sh' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'README.md')); Entry = 'BMCShell/README.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/README.md')); Entry = 'BMCShell/doc/README.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/SCAFFOLD-CLI.md')); Entry = 'BMCShell/doc/SCAFFOLD-CLI.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/LIBRARY-PACKAGE.md')); Entry = 'BMCShell/doc/LIBRARY-PACKAGE.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/SOFTWARE-SOURCES.md')); Entry = 'BMCShell/doc/SOFTWARE-SOURCES.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'scripts/build-source-index.ps1')); Entry = 'BMCShell/scripts/build-source-index.ps1' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/ENVIRONMENT-REGISTRY.md')); Entry = 'BMCShell/doc/ENVIRONMENT-REGISTRY.md' }
-    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/ENVIRONMENT-REGISTRY-v3.csv')); Entry = 'BMCShell/doc/ENVIRONMENT-REGISTRY-v3.csv' }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'shell/launcher.sh')); Entry = 'BMCShell/bin/bmcshell.sh' }
+    @{ Text = "$Version`n"; Entry = 'BMCShell/bin/active' }
+    $coreFile
+    @{ Source = (Resolve-ReleaseFile $ShellBridge); Entry = "$releaseRoot/shell/bmcshell.sh" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'README.md')); Entry = "$releaseRoot/README.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/README.md')); Entry = "$releaseRoot/doc/README.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/SCAFFOLD-CLI.md')); Entry = "$releaseRoot/doc/SCAFFOLD-CLI.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/LIBRARY-PACKAGE.md')); Entry = "$releaseRoot/doc/LIBRARY-PACKAGE.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/SOFTWARE-SOURCES.md')); Entry = "$releaseRoot/doc/SOFTWARE-SOURCES.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'scripts/build-source-index.ps1')); Entry = "$releaseRoot/scripts/build-source-index.ps1" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'scripts/maintain-history.ps1')); Entry = "$releaseRoot/scripts/maintain-history.ps1" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/ENVIRONMENT-REGISTRY.md')); Entry = "$releaseRoot/doc/ENVIRONMENT-REGISTRY.md" }
+    @{ Source = (Resolve-ReleaseFile (Join-Path $repo 'doc/ENVIRONMENT-REGISTRY-v3.csv')); Entry = "$releaseRoot/doc/ENVIRONMENT-REGISTRY-v3.csv" }
 )
 if ($Scaffold) {
     $scaffoldPath = Resolve-ReleaseFile $Scaffold
     Assert-WindowsX64 $scaffoldPath
-    $files += @{ Source = $scaffoldPath; Entry = 'BMCShell/BMCShell-Scaffold.exe' }
+    $files += @{ Source = $scaffoldPath; Entry = "$releaseRoot/BMCShell-Scaffold.exe" }
 }
 $license = Join-Path $repo 'LICENSE'
 if (Test-Path -LiteralPath $license -PathType Leaf) {
-    $files += @{ Source = (Resolve-ReleaseFile $license); Entry = 'BMCShell/LICENSE' }
+    $files += @{ Source = (Resolve-ReleaseFile $license); Entry = "$releaseRoot/LICENSE" }
 }
 $thirdPartyNotices = Join-Path $repo 'THIRD_PARTY_NOTICES.txt'
 if (Test-Path -LiteralPath $thirdPartyNotices -PathType Leaf) {
-    $files += @{ Source = (Resolve-ReleaseFile $thirdPartyNotices); Entry = 'BMCShell/THIRD_PARTY_NOTICES.txt' }
+    $files += @{ Source = (Resolve-ReleaseFile $thirdPartyNotices); Entry = "$releaseRoot/THIRD_PARTY_NOTICES.txt" }
 }
 
 $output = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -98,10 +134,16 @@ if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath $manifestP
 }
 
 $stagingName = [guid]::NewGuid().ToString('N')
+$stagedBinary = Join-Path $output ".$stagingName.version-check.exe"
 $stagedArchive = Join-Path $output ".$stagingName.archive.tmp"
 $stagedManifest = Join-Path $output ".$stagingName.manifest.tmp"
 $archivePublished = $false
 try {
+    # Verify the private snapshot that will actually be archived.
+    [IO.File]::Copy($binaryPath, $stagedBinary, $false)
+    Assert-WindowsX64 $stagedBinary
+    Assert-ReleaseVersion $stagedBinary $Version
+    $coreFile.Source = $stagedBinary
     Write-ReleaseZip $stagedArchive $files
 
     $manifest = [ordered]@{
@@ -120,6 +162,7 @@ try {
     if ($archivePublished) { [IO.File]::Delete($archivePath) }
     throw
 } finally {
+    [IO.File]::Delete($stagedBinary)
     [IO.File]::Delete($stagedArchive)
     [IO.File]::Delete($stagedManifest)
 }

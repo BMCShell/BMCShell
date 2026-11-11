@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"bmcshell/internal/packages"
+	"bmcshell/internal/proxy"
 )
 
 const (
@@ -45,8 +46,9 @@ func networkURL(raw string) (*url.URL, error) {
 	return nil, errors.New("software source URLs must use HTTPS (loopback HTTP is also allowed)")
 }
 
-var client = &http.Client{
-	Timeout: 90 * time.Second,
+var client = http.Client{
+	Transport: proxy.HTTPTransport(""),
+	Timeout:   90 * time.Second,
 	CheckRedirect: func(req *http.Request, previous []*http.Request) error {
 		if len(previous) >= 10 || previous[len(previous)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 			return errors.New("unsafe software source redirect")
@@ -61,7 +63,7 @@ var client = &http.Client{
 	},
 }
 
-func fetch(ctx context.Context, raw string, limit int64) (io.ReadCloser, error) {
+func fetch(ctx context.Context, client *http.Client, raw string, limit int64) (io.ReadCloser, error) {
 	u, err := networkURL(raw)
 	if err != nil {
 		return nil, err
@@ -92,10 +94,18 @@ func fetch(ctx context.Context, raw string, limit int64) (io.ReadCloser, error) 
 // Download retrieves a candidate ZIP into an existing staging directory and
 // verifies both the bytes and the metadata used to plan the operation.
 func Download(ctx context.Context, entry Entry, dir string) (string, error) {
+	return download(ctx, &client, entry, dir)
+}
+
+func (s *Store) Download(ctx context.Context, entry Entry, dir string) (string, error) {
+	return download(ctx, s.client, entry, dir)
+}
+
+func download(ctx context.Context, client *http.Client, entry Entry, dir string) (string, error) {
 	if err := entry.validate(); err != nil {
 		return "", err
 	}
-	response, err := fetch(ctx, entry.URL, maxArchiveBytes)
+	response, err := fetch(ctx, client, entry.URL, maxArchiveBytes)
 	if err != nil {
 		return "", err
 	}

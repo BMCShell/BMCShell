@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
 	"sort"
+
+	"bmcshell/internal/filelock"
+	"bmcshell/internal/proxy"
 )
 
 const (
@@ -36,11 +40,18 @@ type RefreshResult struct {
 }
 
 type Store struct {
-	root string
+	root   string
+	client *http.Client
 }
 
 func Open(home string) *Store {
-	return &Store{root: filepath.Join(home, "catalog")}
+	return OpenWithProxy(home, "")
+}
+
+func OpenWithProxy(home, address string) *Store {
+	client := client
+	client.Transport = proxy.HTTPTransport(address)
+	return &Store{root: filepath.Join(home, "catalog"), client: &client}
 }
 
 func (s *Store) Sources() ([]Source, error) {
@@ -122,6 +133,12 @@ func (s *Store) RemoveSource(name string) error {
 	})
 }
 
+func (s *Store) ResetSources() error {
+	return s.withLock(func() error {
+		return writeJSON(filepath.Join(s.root, "sources.json"), []Source{})
+	})
+}
+
 func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, error) {
 	sources, err := s.Sources()
 	if err != nil {
@@ -154,7 +171,7 @@ type cachedIndex struct {
 }
 
 func (s *Store) refreshSource(ctx context.Context, source Source) (int, error) {
-	response, err := fetch(ctx, source.URL, maxIndexBytes)
+	response, err := fetch(ctx, s.client, source.URL, maxIndexBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -236,14 +253,11 @@ func (s *Store) withLock(action func() error) error {
 	if err := os.MkdirAll(s.root, 0700); err != nil {
 		return err
 	}
-	lock := filepath.Join(s.root, ".lock")
-	if err := os.Mkdir(lock, 0700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return errors.New("software source configuration is busy")
-		}
-		return err
+	unlock, err := filelock.Acquire(filepath.Join(s.root, ".sources.lock"))
+	if err != nil {
+		return fmt.Errorf("lock software source configuration: %w", err)
 	}
-	defer os.Remove(lock)
+	defer unlock()
 	return action()
 }
 

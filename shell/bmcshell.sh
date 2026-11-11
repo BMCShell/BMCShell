@@ -14,11 +14,38 @@ if [[ ${_BMCSHELL_LOADED-} != 1 ]] &&
     return 2
 fi
 
+_bmcshell_release_bridge() {
+    [[ -z ${BMCSHELL_EXE-} ]] || return 0
+    local source_file=${BASH_SOURCE[0]} root release bridge
+    [[ $source_file == */* ]] || source_file=./$source_file
+    root=$(builtin cd -P -- "${source_file%/*}/.." && builtin pwd -P) || return
+    [[ -f $root/.active-release ]] || return 0
+    if ! IFS= read -r release < "$root/.active-release" ||
+        [[ ! $release =~ ^release-[0-9]+$ ]]; then
+        printf 'BMCShell: invalid active release marker.\n' >&2
+        return 2
+    fi
+    bridge=$root/.releases/$release/shell/bmcshell.sh
+    if [[ ! -f $bridge ]]; then
+        printf 'BMCShell: active release adapter not found.\n' >&2
+        return 2
+    fi
+    builtin printf '%s\n' "$bridge"
+}
+
+_bmcshell_active_bridge=$(_bmcshell_release_bridge) || return
+if [[ -n $_bmcshell_active_bridge ]]; then
+    builtin source "$_bmcshell_active_bridge"
+    return
+fi
+builtin unset _bmcshell_active_bridge
+
 _bmcshell_executable() {
     local path=${BMCSHELL_EXE-} directory source_file=${BASH_SOURCE[0]}
     if [[ -z $path ]]; then
         [[ $source_file == */* ]] || source_file=./$source_file
-        path=${source_file%/*}/../BMCShell.exe
+        path=${source_file%/*}/../build/BMCShell.exe
+        [[ -f $path ]] || path=${source_file%/*}/../BMCShell.exe
     fi
     if [[ $path =~ ^[A-Za-z]: ]] && command -v cygpath >/dev/null; then
         path=$(command cygpath -u "$path") || return
@@ -33,14 +60,31 @@ _bmcshell_executable() {
 }
 
 _bmcshell_call() (
-    BMCSHELL_IPMI_PROXY=${_BMCSHELL_IPMI_PROXY-}
-    builtin export BMCSHELL_CONTEXT BMCSHELL_IPMI_PROXY
+    if [[ ${_BMCSHELL_PROXY_ADDRESS+x} ]]; then
+        builtin export "BMCSHELL_BRIDGE_PROXY=$_BMCSHELL_PROXY_ADDRESS"
+    fi
+    if [[ -t 0 ]]; then
+        builtin export BMCSHELL_BRIDGE_INTERACTIVE=1
+    else
+        builtin export BMCSHELL_BRIDGE_INTERACTIVE=0
+    fi
+    if [[ ${1-} == doctor ]]; then
+        builtin unset BMCSHELL_BRIDGE_BASH
+        if command -v cygpath >/dev/null; then
+            local native_bash
+            if native_bash=$(command cygpath -aw -- "$BASH"); then
+                builtin export "BMCSHELL_BRIDGE_BASH=$native_bash"
+            fi
+        fi
+    fi
+    builtin export BMCSHELL_CONTEXT
+    # Convert only actual file operands, never URLs or resolver arguments.
+    builtin export MSYS2_ARG_CONV_EXCL='*'
     builtin exec "$_BMCSHELL_EXE" "$@"
 )
 
 _bmcshell_bridge() {
-    # Keep resolver and tool arguments literal when MSYS2 invokes the native executable.
-    MSYS2_ARG_CONV_EXCL='*' _bmcshell_call bridge "$@"
+    _bmcshell_call bridge "$@"
 }
 
 _bmcshell_tools() {
@@ -51,7 +95,7 @@ _bmcshell_tools() {
     while IFS= read -r name; do
         name=${name%$'\r'}
         [[ -n $name ]] || continue
-        if [[ ! $name =~ ^[a-z][a-z0-9_]*$ || $name == bmc ||
+        if [[ ! $name =~ ^[a-z][a-z0-9_-]*$ || $name == bmc ||
             $'\n'$reserved$'\n' == *$'\n'"$name"$'\n'* ]]; then
             printf 'BMCShell: invalid or reserved tool name: %q\n' "$name" >&2
             return 2
@@ -127,6 +171,8 @@ _bmcshell_dispatch_tool() {
         printf 'BMCShell: invalid Bash tool entry.\n' >&2
         return 2
     fi
+    # V2 same-shell entries query the target through the old bridge spelling.
+    local _bmcshell_legacy_tool=1
     # Preserve the caller's conditional status handling when Bash uses set -e.
     command source "$_bmcshell_tool_entry" "$_bmcshell_tool_name" "$@"
 }
@@ -153,7 +199,7 @@ _bmcshell_check_tool_functions() {
     declarations=$(builtin readonly -pf) || return
     while IFS=' ' read -r word flags name rest; do
         if [[ $word == declare && $flags == -*r* && $flags == -*f* &&
-            $name =~ ^[a-z][a-z0-9_]*$ && -z $rest ]]; then
+            $name =~ ^[a-z][a-z0-9_-]*$ && -z $rest ]]; then
             locked[$name]=1
         fi
     done <<< "$declarations"
@@ -235,21 +281,39 @@ _bmcshell_check_context() {
 }
 
 _bmcshell_use() {
-    local candidate
-    if [[ ${1-} == -h || ${1-} == --help ]]; then
-        _bmcshell_call help use --usage
+    local response candidate credentials username password
+    if [[ $# == 1 && ( $1 == -h || $1 == --help ) ]]; then
+        _bmcshell_call help use
         return
     fi
+    if [[ $- == *x* || $- == *a* || -o functrace || -n $(builtin trap -p DEBUG) ]]; then
+        printf 'BMCShell: disable tracing and automatic export before selecting a target.\n' >&2
+        return 2
+    fi
     _bmcshell_check_context || return
-    candidate=$(_bmcshell_bridge resolve "$@") || return
-    if [[ $candidate != \{*\} || $candidate == *$'\n'* ]]; then
+    response=$(BMCSHELL_BRIDGE_RESOLVE_PRIVATE=1 _bmcshell_bridge resolve "$@") || return
+    candidate=${response%%$'\n'*}
+    if [[ $candidate != \{*\} ]]; then
         printf 'BMCShell: invalid resolver response.\n' >&2
         return 2
+    fi
+    if [[ $response == *$'\n'* ]]; then
+        credentials=${response#*$'\n'}
+        username=${credentials%%$'\n'*}
+        password=${credentials#*$'\n'}
+        if [[ $credentials != *$'\n'* || -z $username || -z $password || $password == *$'\n'* ]]; then
+            printf 'BMCShell: invalid private resolver response.\n' >&2
+            return 2
+        fi
     fi
     if [[ -z ${BMCSHELL_CONTEXT-} ]]; then
         _bmcshell_activate_session_tools || return
     fi
     _BMCSHELL_SESSION_STATE=()
+    if [[ -n ${password-} ]]; then
+        _BMCSHELL_SESSION_STATE[v2.user]=$username
+        _BMCSHELL_SESSION_STATE[v2.password]=$password
+    fi
     BMCSHELL_CONTEXT=$candidate
     builtin export -n BMCSHELL_CONTEXT
     _bmcshell_render_prompt || :
@@ -258,11 +322,15 @@ _bmcshell_use() {
 _bmcshell_exit() {
     if (( $# )); then
         if (( $# == 1 )) && [[ $1 == -h || $1 == --help ]]; then
-            _bmcshell_call help exit --usage
+            _bmcshell_call help exit
             return
         fi
         printf 'Usage: bmc exit\n' >&2
         return 2
+    fi
+    if [[ -z ${BMCSHELL_CONTEXT-} ]]; then
+        printf 'No active BMC target.\n'
+        return 0
     fi
     _bmcshell_check_context || return
     _bmcshell_restore_session_tools || return
@@ -271,34 +339,159 @@ _bmcshell_exit() {
     _bmcshell_restore_prompt || :
 }
 
-_bmcshell_ipmi_proxy() {
-    local port
-    if (( $# == 1 )); then
-        case $1 in
-            -h|--help) _bmcshell_call help ipmi-proxy --usage; return ;;
-            on) _BMCSHELL_IPMI_PROXY=127.0.0.1:1080 ;;
-            off) _BMCSHELL_IPMI_PROXY='' ;;
-            *)
-                if [[ $1 =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]]; then
-                    port=$((10#${BASH_REMATCH[1]}))
-                fi
-                if [[ -z ${port-} ]] || (( port < 1 || port > 65535 )); then
-                    printf '用法：bmc ipmi-proxy [on|off|127.0.0.1:端口]\n' >&2
-                    return 2
-                fi
-                _BMCSHELL_IPMI_PROXY=127.0.0.1:$port
-                ;;
+_bmcshell_check_proxy_environment() {
+    local name declaration
+    for name in "${_BMCSHELL_PUBLIC_PROXY_NAMES[@]}" BMCSHELL_PROXY_ADDRESS; do
+        declaration=$(builtin declare -p "$name" 2>/dev/null) || continue
+        case $declaration in
+            'declare -- '*|'declare -x '*) ;;
+            *) printf 'BMCShell: cannot manage proxy variable %s with its current Bash attributes.\n' "$name" >&2
+               return 2 ;;
         esac
-    elif (( $# > 1 )); then
-        printf '用法：bmc ipmi-proxy [on|off|127.0.0.1:端口]\n' >&2
-        return 2
+    done
+}
+
+_bmcshell_apply_proxy() {
+    local address=$1 name declaration
+    if [[ -n $address ]]; then
+        if [[ -z ${_BMCSHELL_PROXY_ADDRESS-} ]]; then
+            for name in "${_BMCSHELL_PUBLIC_PROXY_NAMES[@]}"; do
+                if [[ ${!name+x} ]]; then
+                    _BMCSHELL_PROXY_SAVED_VALUES[$name]=${!name}
+                    declaration=$(builtin declare -p "$name") || return
+                    if [[ $declaration == 'declare -x '* ]]; then
+                        _BMCSHELL_PROXY_SAVED_EXPORT[$name]=1
+                    fi
+                fi
+            done
+        fi
+        for name in "${_BMCSHELL_PUBLIC_PROXY_NAMES[@]}"; do
+            case $name in
+                no_proxy|NO_PROXY) builtin unset "$name" || return ;;
+                *) builtin export "$name=socks5h://$address" || return ;;
+            esac
+        done
+        builtin export "BMCSHELL_PROXY_ADDRESS=$address" || return
+    elif [[ -n ${_BMCSHELL_PROXY_ADDRESS-} ]]; then
+        for name in "${_BMCSHELL_PUBLIC_PROXY_NAMES[@]}"; do
+            if [[ ${_BMCSHELL_PROXY_SAVED_VALUES[$name]+set} ]]; then
+                builtin printf -v "$name" '%s' "${_BMCSHELL_PROXY_SAVED_VALUES[$name]}" || return
+                if [[ ${_BMCSHELL_PROXY_SAVED_EXPORT[$name]+set} ]]; then
+                    builtin export "$name" || return
+                else
+                    builtin export -n "$name" || return
+                fi
+            else
+                builtin unset "$name" || return
+            fi
+        done
+        _BMCSHELL_PROXY_SAVED_VALUES=() _BMCSHELL_PROXY_SAVED_EXPORT=()
     fi
-    builtin export -n _BMCSHELL_IPMI_PROXY
-    if [[ -n ${_BMCSHELL_IPMI_PROXY-} ]]; then
-        printf 'IPMI SOCKS5：%s\n' "$_BMCSHELL_IPMI_PROXY"
+    if [[ -z $address ]]; then
+        builtin unset BMCSHELL_PROXY_ADDRESS || return
+    fi
+    _BMCSHELL_PROXY_ADDRESS=$address
+}
+
+_bmcshell_proxy() {
+    local state address
+    if [[ $# == 1 && ( $1 == -h || $1 == --help ) ]]; then
+        _bmcshell_call help proxy
+        return
+    fi
+    if [[ ${1-} == on || ( $# -gt 0 && -n ${_BMCSHELL_PROXY_ADDRESS-} ) ]]; then
+        _bmcshell_check_proxy_environment || return
+    fi
+    state=$(_bmcshell_bridge proxy-config "$@") || return
+    state=${state%$'\r'}
+    address=${state%%|*}
+    if (( $# )); then
+        _bmcshell_apply_proxy "$address" || return
+    fi
+    if [[ -z $address ]]; then
+        printf 'BMC 全局代理：关闭（已配置 %s）\n' "${state#*|}"
     else
-        printf 'IPMI：直连\n'
+        printf 'BMC SOCKS5：%s\n' "$address"
     fi
+}
+
+_bmcshell_public_command() {
+    if command -v cygpath >/dev/null; then
+        if [[ $# == 4 && $1 == plugin && $2 == install && $3 == --file ]]; then
+            local path
+            path=$(command cygpath -aw -- "$4") || return
+            _bmcshell_call "$1" "$2" "$3" "$path"
+            return
+        fi
+        if [[ $# == 3 && $1 == update && $2 == --file ]]; then
+            local path
+            path=$(command cygpath -aw -- "$3") || return
+            _bmcshell_call "$1" "$2" "$path"
+            return
+        fi
+    fi
+    _bmcshell_call "$@"
+}
+
+_bmcshell_complete() {
+    local current=${COMP_WORDS[COMP_CWORD]} command=${COMP_WORDS[1]-}
+    local previous=${COMP_WORDS[COMP_CWORD-1]} words category= value extra
+    local commands='help doctor book library tool plugin use status exit proxy setting version update'
+    COMPREPLY=()
+    if (( COMP_CWORD == 1 )); then
+        words="$commands -h --help"
+    else
+        words='-h --help'
+        case $command in
+            help) words=$commands ;;
+            doctor) words+=' -d --detial -f --filter -a --auto' ;;
+            tool)
+                if (( COMP_CWORD == 2 )); then
+                    words+=' -l --list -a --all'
+                    category=tools
+                fi
+                ;;
+            book)
+                if (( COMP_CWORD == 2 )); then
+                    words+=' -l --list'
+                    category=books
+                else
+                    words+=' -l --list -s --search -v --version'
+                fi
+                ;;
+            library) words+=' -l --list' ;;
+            plugin)
+                if (( COMP_CWORD == 2 )); then
+                    words+=' list update search install upgrade remove'
+                elif [[ $previous == install ]]; then
+                    words+=' --file'
+                fi
+                ;;
+            use)
+                if [[ $previous == --resolver ]]; then
+                    words=
+                    category=resolvers
+                elif (( COMP_CWORD == 3 )); then
+                    words+=' --resolver --'
+                fi
+                ;;
+            status|tool) words+=' --env' ;;
+            proxy) words+=' on off -m' ;;
+            setting) words+=' --get --set --reset --check' ;;
+            update) words+=' --file --version' ;;
+        esac
+    fi
+    while IFS= read -r value; do
+        [[ -n $value ]] && COMPREPLY+=("$value")
+    done < <(builtin compgen -W "$words" -- "$current")
+    if [[ -n $category ]]; then
+        extra=$(_bmcshell_bridge completion "$category" 2>/dev/null) || return
+        while IFS= read -r value; do
+            value=${value%$'\r'}
+            [[ -n $value && $value == "$current"* ]] && COMPREPLY+=("$value")
+        done <<< "$extra"
+    fi
+    return 0
 }
 
 _BMCSHELL_EXE=$(_bmcshell_executable) || return
@@ -311,31 +504,58 @@ if [[ ${_BMCSHELL_LOADED-} != 1 ]]; then
 fi
 if [[ ${_BMCSHELL_BASH_RUNTIME-} != 1 ]]; then
     if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2 )); then
-        builtin declare -A _BMCSHELL_SESSION_STATE || return
+        builtin declare -A _BMCSHELL_SESSION_STATE _BMCSHELL_PROXY_SAVED_VALUES _BMCSHELL_PROXY_SAVED_EXPORT || return
     else
-        builtin declare -gA _BMCSHELL_SESSION_STATE || return
+        builtin declare -gA _BMCSHELL_SESSION_STATE _BMCSHELL_PROXY_SAVED_VALUES _BMCSHELL_PROXY_SAVED_EXPORT || return
     fi
     _BMCSHELL_SESSION_STATE=()
     builtin export -n _BMCSHELL_SESSION_STATE
-    _BMCSHELL_IPMI_PROXY=''
-    builtin export -n _BMCSHELL_IPMI_PROXY
+    _BMCSHELL_PUBLIC_PROXY_NAMES=(http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY)
+    builtin unset _BMCSHELL_PROXY_ADDRESS BMCSHELL_BRIDGE_PROXY
     _BMCSHELL_BASH_RUNTIME=1
+fi
+
+_bmcshell_load_proxy() {
+    local state address
+    state=$(_bmcshell_bridge proxy-config) || return
+    address=${state%%|*}
+    if [[ -n $address ]]; then
+        _bmcshell_check_proxy_environment || return
+    fi
+    _bmcshell_apply_proxy "$address"
+}
+
+if [[ ! ${_BMCSHELL_PROXY_ADDRESS+x} ]]; then
+    _bmcshell_load_proxy || return
 fi
 
 function bmc {
     case ${1-} in
         use) shift; _bmcshell_use "$@" ;;
         exit) shift; _bmcshell_exit "$@" ;;
-        ipmi-proxy) shift; _bmcshell_ipmi_proxy "$@" ;;
-        proxy)
-            _bmcshell_call "$@" || return
-            if (( $# == 2 )) && [[ $2 == off ]]; then
-                _BMCSHELL_IPMI_PROXY=''
-                builtin export -n _BMCSHELL_IPMI_PROXY
+        proxy) shift; _bmcshell_proxy "$@" ;;
+        status|tool)
+            BMCSHELL_BRIDGE_STATUS_USER="${_BMCSHELL_SESSION_STATE[v2.user]-}" \
+            BMCSHELL_BRIDGE_STATUS_PASSWORD="${_BMCSHELL_SESSION_STATE[v2.password]+set}" \
+            BMCSHELL_BRIDGE_STATUS_SNMP_COMMUNITY="${_BMCSHELL_SESSION_STATE[v2.snmp_community]+set}" \
+            BMCSHELL_BRIDGE_STATUS_SNMP_VERSION="${_BMCSHELL_SESSION_STATE[v2.snmp_version]-}" \
+            BMCSHELL_BRIDGE_STATUS_TLS="${_BMCSHELL_SESSION_STATE[v2.tls]-}" \
+                _bmcshell_call "$@"
+            ;;
+        bridge)
+            if [[ ${_bmcshell_legacy_tool-} == 1 && $# == 3 && $2 == field ]]; then
+                shift
+                _bmcshell_bridge "$@"
+            else
+                printf 'BMCShell: unknown command bridge; see bmc help.\n' >&2
+                return 2
             fi
             ;;
-        *) _bmcshell_call "$@" ;;
+        *) _bmcshell_public_command "$@" ;;
     esac
 }
 
+if [[ $- == *i* ]]; then
+    builtin complete -F _bmcshell_complete bmc
+fi
 _bmcshell_refresh_globals

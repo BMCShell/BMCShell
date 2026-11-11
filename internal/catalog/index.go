@@ -108,7 +108,7 @@ func (e Entry) validate() error {
 		return errors.New("invalid package name")
 	}
 	switch e.Type {
-	case "book", "library", "theme", "toolplugin", "bundle":
+	case "book", "library", "theme", "tool", "toolplugin", "bundle":
 	default:
 		return errors.New("invalid package type")
 	}
@@ -156,7 +156,7 @@ func (e Entry) validate() error {
 			return errors.New("invalid indexed Library migration")
 		}
 	}
-	if e.Type != "toolplugin" && len(e.LibrarySchemas) > 0 {
+	if packages.CanonicalType(e.Type) != "tool" && len(e.LibrarySchemas) > 0 {
 		return errors.New("only tools can have Library schema dependencies")
 	}
 	for id, supported := range e.LibrarySchemas {

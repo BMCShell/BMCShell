@@ -22,6 +22,7 @@ const maxCSVBytes = 256 << 10
 var (
 	nameRE       = regexp.MustCompile(`^[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$`)
 	publisherRE  = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+	snmpOIDRE    = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*$`)
 	keyRE        = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$`)
 	fullHeader   = []string{"逻辑字段", "现有载体", "独立环境变量", "分类", "生效范围", "是否必需", "是否敏感", "框架默认值", "状态", "说明"}
 	pluginHeader = []string{"name", "key", "sensitive", "default"}
@@ -62,6 +63,10 @@ func (f Field) Validate(value string) error {
 		if value != "verify" && value != "insecure" {
 			return fmt.Errorf("%s must be verify or insecure", f.Name)
 		}
+	case "BMCSHELL_SNMP_ENTERPRISES":
+		if value != "" && (len(value) > 256 || !snmpOIDRE.MatchString(value)) {
+			return fmt.Errorf("%s must be empty or contain decimal OID components", f.Name)
+		}
 	case "BMCSHELL_SNMP_VERSION":
 		if value != "1" && value != "2c" && value != "3" {
 			return fmt.Errorf("%s must be 1, 2c or 3", f.Name)
@@ -92,6 +97,10 @@ func LoadFramework(path string) (Registry, error) {
 	}
 	for name, field := range builtin {
 		edited, ok := registry[name]
+		if !ok && name == "BMCSHELL_SNMP_ENTERPRISES" {
+			registry[name] = field
+			continue
+		}
 		if !ok || edited.Key != field.Key || edited.Sensitive != field.Sensitive {
 			return nil, fmt.Errorf("%s: cannot remove or change the identity of %s", path, name)
 		}

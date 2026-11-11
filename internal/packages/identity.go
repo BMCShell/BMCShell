@@ -12,6 +12,23 @@ var (
 	shortNameRE = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 )
 
+// CanonicalType maps the earlier tool manifest spelling to the public type.
+func CanonicalType(kind string) string {
+	if kind == "toolplugin" {
+		return "tool"
+	}
+	return kind
+}
+
+func ValidType(kind string) bool {
+	switch kind {
+	case "book", "library", "theme", "tool", "bundle":
+		return true
+	default:
+		return false
+	}
+}
+
 // NameFor constructs the machine-readable name for an extension.
 func NameFor(publisher, kind, shortName string) (string, error) {
 	if !publisherRE.MatchString(publisher) {
@@ -51,6 +68,15 @@ func ValidateVersion(version string) error {
 		return fmt.Errorf("invalid package version %q", version)
 	}
 	return nil
+}
+
+// DataName is the short lookup name for a Book or Library. Older packages
+// used the full manifest name and remain readable.
+func (m Manifest) DataName() string {
+	if m.ShortName != "" {
+		return m.ShortName
+	}
+	return m.Name
 }
 
 func (m Manifest) Title() string {

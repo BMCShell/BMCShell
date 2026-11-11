@@ -4,23 +4,21 @@
 
 ## 用户端
 
-将命令中的示例域名替换为你维护的索引地址。官方源名固定为 `official`，地址由维护者配置。自定义源可使用独立的名称。
+使用 `bmc setting` 管理软件源。设置名为 `plugin.source.<名称>`，保留名称 `official` 用于官方源。示例地址请替换为维护者提供的索引地址。
 
 ```text
-bmc plugin source set-official https://packages.example.org/bmcshell/index.json
-bmc plugin source add internal https://packages.example.com/bmcshell/index.json
-bmc plugin source list
+bmc setting --set plugin.source.official https://packages.example.org/bmcshell/index.json
+bmc setting --set plugin.source.internal https://packages.example.com/bmcshell/index.json
 bmc plugin update
-bmc plugin update internal
-bmc plugin install sbmc-library-cid --source internal
+bmc plugin search cid
+bmc plugin install sbmc-library-cid@2.0.0
 bmc plugin upgrade sbmc-library-cid
-bmc plugin upgrade
-bmc plugin source remove internal
+bmc setting --reset plugin.source.internal
 ```
 
-`install` 和 `upgrade` 都可以用包名或 UUID。无参数的 `upgrade` 会列出可升级项供选择，再确认最终计划。同一 UUID 出现在多个源时，用 `--source` 选定目标来源；已从软件源安装的包默认沿用其来源。框架按平台和依赖约束选择版本，并校验下载 ZIP 的 SHA256 与包内清单。也可以用 `bmc plugin install --file <目录或 ZIP>` 安装本地包。
+安装和升级使用完整包名，安装可指定版本。搜索按内部 UUID 合并同一包的结果。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。也可以用 `bmc plugin install --file <目录或 ZIP>` 安装本地包。
 
-Library 的数据共享地址独立配置。发现远端快照的结构变化后，`bmc library refresh` 使用缓存的索引选择匹配结构的库和工具版本。确认前会列出版本、来源和数据差异。通过 `--dry-run` 可以预览，`--upgrade-with` 可用于手工提供本地发布包。[Library 发布与同步](LIBRARY-PACKAGE.md)
+Library 数据随发布包安装或升级，并按工作库、旧版基准和新版发布数据进行差异合并。主程序更新默认读取主仓 GitHub Releases。[Library 发布与升级](LIBRARY-PACKAGE.md)
 
 ## 维护公开源
 

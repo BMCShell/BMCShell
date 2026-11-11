@@ -36,7 +36,7 @@ BMCShell-Scaffold.exe create
 | 按包名创建 | 提供 `--name`，框架拆分并校验发布方、类型和短名。完整包名模式与分字段模式互斥。 |
 | Bundle 成员 | 创建 Bundle 时至少提供一个 `--member <UUID>`，可重复指定。交互模式在选中 Bundle 后收集成员。 |
 
-直接创建时，省略 `--display-name` 使用完整包名作为显示名，省略 `--description` 时生成空描述供后续填写。项目包含独立 Git 仓库、包清单、README、帮助、变更历史、打包脚本和类型对应的模板。Book 模板生成使用 v2 数据结构的 `*.book.db`。
+直接创建时，省略 `--display-name` 使用完整包名作为显示名，省略 `--description` 时生成空描述供后续填写。项目包含独立 Git 仓库、包清单、README、帮助、变更历史、打包脚本和类型对应的模板。Book 模板生成使用 v2 数据结构的 `book/<shortName>.book.db`，例如 `book/redfish.book.db`。
 
 ### 输出路径
 
@@ -59,5 +59,5 @@ PowerShell 示例，输出到 `D:\bmcshell-book-redfish\`。
 
 - 正式构建及打包入口校验清单字段、推导出的 `name` 和源码项目根目录名。编译型工具在编译前检查，数据型包在打包前检查。安装后的存储路径使用 UUID。
 - 发布归档为 `<name>@<version>.zip`，SHA256 清单为 `<name>@<version>.manifest.json`。有多个平台产物时用平台子目录区分，清单记录对应平台和文件路径。
-- `install`、`upgrade`、`show` 和 `remove` 接受完整 `name` 或 UUID。存在多个同名候选时，交互终端列出类型、来源、版本和 UUID 供选择，脚本可直接用 UUID。用 `--file` 安装本地目录或 ZIP。[软件源管理](SOFTWARE-SOURCES.md)
+- `bmc plugin install`、`upgrade` 和 `remove` 使用完整 `name`。安装时可在包名后追加 `@<version>`。同名包由交互终端列出候选供用户选择。`bmc book` 和 `bmc library` 使用 `shortName`。用 `bmc plugin install --file` 安装本地目录或 ZIP。[软件源管理](SOFTWARE-SOURCES.md)
 - 依赖、锁定、升级和回退以 UUID 为准。迁移旧包时保留 UUID，将原中文名称放入 `displayName`，旧 `summary` 可迁移到 `description`。

@@ -67,11 +67,20 @@ func StructureDifferences(current, incoming Snapshot) []string {
 }
 
 type Change struct {
-	Table                 string
-	Key                   []any
-	Before, Local, Remote []any
-	Conflict              bool
-	UseRemote             bool
+	Table         string
+	Key           []any
+	Local, Remote []any
+	Conflict      bool
+	UseRemote     bool
+	Fields        []FieldChange
+}
+
+// FieldChange describes one changed field in a record present in both databases.
+type FieldChange struct {
+	Name                string
+	Local, Remote       any
+	Conflict, UseRemote bool
+	column              int
 }
 
 type tableLayout struct {
@@ -80,14 +89,13 @@ type tableLayout struct {
 }
 
 type Plan struct {
-	Changes         []Change
-	BaselineChanged bool
-	layouts         map[string]tableLayout
+	Changes []Change
+	layouts map[string]tableLayout
 }
 
 // Compare produces a deterministic three-way merge plan. The paths must already
 // have been validated against the supplied schema.
-func Compare(localPath, baselinePath, remotePath string, snapshot Snapshot, contract Contract, replace bool) (Plan, error) {
+func Compare(localPath, baselinePath, remotePath string, snapshot Snapshot, contract Contract) (Plan, error) {
 	plan := Plan{layouts: make(map[string]tableLayout)}
 	local, err := OpenReadOnly(localPath)
 	if err != nil {
@@ -132,8 +140,7 @@ func Compare(localPath, baselinePath, remotePath string, snapshot Snapshot, cont
 		if err != nil {
 			return plan, err
 		}
-		plan.BaselineChanged = plan.BaselineChanged || !reflect.DeepEqual(baselineRows, remoteRows)
-		plan.Changes = append(plan.Changes, compareRows(table.Name, layout, localRows, baselineRows, remoteRows, replace)...)
+		plan.Changes = append(plan.Changes, compareRows(table.Name, layout, localRows, baselineRows, remoteRows)...)
 	}
 	return plan, nil
 }
@@ -185,7 +192,7 @@ func keyValues(row []any, layout tableLayout) []any {
 	return values
 }
 
-func compareRows(table string, layout tableLayout, local, before, remote map[string][]any, replace bool) []Change {
+func compareRows(table string, layout tableLayout, local, before, remote map[string][]any) []Change {
 	names := make(map[string]bool)
 	for key := range local {
 		names[key] = true
@@ -201,20 +208,61 @@ func compareRows(table string, layout tableLayout, local, before, remote map[str
 	var changes []Change
 	for _, key := range keys {
 		ours, base, theirs := local[key], before[key], remote[key]
-		if reflect.DeepEqual(ours, theirs) || !replace && reflect.DeepEqual(base, theirs) {
+		if reflect.DeepEqual(ours, theirs) || reflect.DeepEqual(base, theirs) {
 			continue
 		}
 		record := ours
 		if record == nil {
 			record = theirs
 		}
-		conflict := !replace && !reflect.DeepEqual(ours, base)
-		changes = append(changes, Change{
-			Table: table, Key: keyValues(record, layout), Before: base, Local: ours,
-			Remote: theirs, Conflict: conflict, UseRemote: !conflict,
-		})
+		change := Change{
+			Table: table, Key: keyValues(record, layout), Local: ours, Remote: theirs,
+		}
+		if ours != nil && theirs != nil {
+			for column, name := range layout.columns {
+				if slices.Contains(layout.keyIndexes, column) || reflect.DeepEqual(ours[column], theirs[column]) {
+					continue
+				}
+				var previous any
+				if base != nil {
+					previous = base[column]
+					if reflect.DeepEqual(previous, theirs[column]) {
+						continue
+					}
+				}
+				conflict := base == nil || !reflect.DeepEqual(previous, ours[column])
+				change.Fields = append(change.Fields, FieldChange{
+					Name: name, column: column, Local: ours[column], Remote: theirs[column],
+					Conflict: conflict, UseRemote: !conflict,
+				})
+			}
+			if len(change.Fields) == 0 {
+				continue
+			}
+		} else {
+			change.Conflict = !reflect.DeepEqual(ours, base)
+			change.UseRemote = !change.Conflict
+		}
+		changes = append(changes, change)
 	}
 	return changes
+}
+
+// selectedRecord returns the approved result and whether it differs from the working record.
+func (c Change) selectedRecord() ([]any, bool) {
+	if len(c.Fields) == 0 {
+		return c.Remote, c.UseRemote
+	}
+	var selected []any
+	for _, field := range c.Fields {
+		if field.UseRemote {
+			if selected == nil {
+				selected = slices.Clone(c.Local)
+			}
+			selected[field.column] = field.Remote
+		}
+	}
+	return selected, selected != nil
 }
 
 // Apply changes only the staged copy of the working database.
@@ -251,18 +299,25 @@ func (p Plan) Apply(path string, dataVersion string) error {
 		return err
 	}
 	defer tx.Rollback()
+	var inserts []Change
 	for _, change := range p.Changes {
-		if change.UseRemote && change.Local != nil {
+		record, changed := change.selectedRecord()
+		if !changed {
+			continue
+		}
+		if change.Local != nil {
 			if err := deleteLocalRow(tx, change, p.layouts[change.Table]); err != nil {
 				return err
 			}
 		}
+		if record != nil {
+			change.Remote = record
+			inserts = append(inserts, change)
+		}
 	}
-	for _, change := range p.Changes {
-		if change.UseRemote && change.Remote != nil {
-			if err := insertRemoteRow(tx, change, p.layouts[change.Table]); err != nil {
-				return err
-			}
+	for _, change := range inserts {
+		if err := insertRemoteRow(tx, change, p.layouts[change.Table]); err != nil {
+			return err
 		}
 	}
 	if _, err := tx.Exec("UPDATE _bmcshell_library SET data_version = ?", dataVersion); err != nil {

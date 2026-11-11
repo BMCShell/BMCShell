@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"bmcshell/internal/filelock"
 	"bmcshell/internal/librarydb"
 )
 
@@ -33,43 +35,138 @@ func Open(root string) (*Store, error) {
 	return &Store{dir: filepath.Join(root, "packages")}, nil
 }
 
+// PackageDamage identifies a selected package whose release files cannot be
+// used. Its Package holds the identity from the registry, without capabilities.
+type PackageDamage struct {
+	Package Package
+	Err     error
+	legacy  bool
+}
+
+func (d PackageDamage) entry() registryEntry {
+	p := d.Package
+	return registryEntry{ID: p.ID, Kind: p.Type, Version: p.Version, Source: p.Source, Name: p.Name}
+}
+
+func (d PackageDamage) Error() string {
+	p := d.Package
+	if p.Name != "" {
+		return fmt.Sprintf("%s@%s (%s) at %s: %v", p.Name, p.Version, p.ID, p.Root, d.Err)
+	}
+	return fmt.Sprintf("%s %s at %s: %v", p.ID, p.Version, p.Root, d.Err)
+}
+
 func (s *Store) List() ([]Package, error) {
+	installed, damaged, err := s.Inventory()
+	if err != nil || len(damaged) == 0 {
+		return installed, err
+	}
+	return availablePackages(installed), nil
+}
+
+// Inventory returns validated payloads and individual damaged selections. An
+// unreadable registry is a separate error because its selections are unknown.
+func (s *Store) Inventory() ([]Package, []PackageDamage, error) {
+	entries, registered, err := s.registeredPackages()
+	if err != nil {
+		return nil, nil, err
+	}
+	if registered {
+		var installed []Package
+		var damaged []PackageDamage
+		for _, entry := range entries {
+			p, err := s.loadRegisteredPackage(entry)
+			if err != nil {
+				damaged = append(damaged, PackageDamage{Package: p, Err: err})
+				continue
+			}
+			installed = append(installed, p)
+		}
+		return installed, damaged, nil
+	}
 	set, err := s.readActiveSet()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return listSet(s.setPath(set.Active))
+	return inventorySet(s.setPath(set.Active))
 }
 
 func listSet(root string) ([]Package, error) {
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	installed, damaged, err := inventorySet(root)
 	if err != nil {
 		return nil, err
 	}
+	if len(damaged) != 0 {
+		return nil, damaged[0]
+	}
+	return installed, nil
+}
+
+func inventorySet(root string) ([]Package, []PackageDamage, error) {
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
 	var installed []Package
+	var damaged []PackageDamage
 	for _, entry := range entries {
 		if !packageID.MatchString(entry.Name()) {
 			continue
 		}
-		if !entry.IsDir() {
-			return nil, fmt.Errorf("invalid package directory %s", entry.Name())
-		}
-		p, err := loadPackage(filepath.Join(root, entry.Name()))
+		path := filepath.Join(root, entry.Name())
+		p, err := loadLegacyPackage(path, entry)
 		if err != nil {
-			return nil, fmt.Errorf("installed package %s: %w", entry.Name(), err)
-		}
-		if p.ID != entry.Name() {
-			return nil, fmt.Errorf("installed package ID %s does not match directory %s", p.ID, entry.Name())
-		}
-		if p.Source, err = readSource(p.Root); err != nil {
-			return nil, fmt.Errorf("installed package %s: %w", entry.Name(), err)
+			damaged = append(damaged, PackageDamage{
+				Package: Package{Manifest: Manifest{ID: entry.Name()}, Root: path}, Err: err, legacy: true,
+			})
+			continue
 		}
 		installed = append(installed, p)
 	}
-	return installed, nil
+	return installed, damaged, nil
+}
+
+func loadLegacyPackage(path string, entry os.DirEntry) (Package, error) {
+	if !entry.IsDir() {
+		return Package{}, fmt.Errorf("invalid package directory %s", path)
+	}
+	p, err := loadPackage(path)
+	if err != nil {
+		return Package{}, err
+	}
+	if p.ID != entry.Name() {
+		return Package{}, fmt.Errorf("installed package ID %s does not match directory %s", p.ID, entry.Name())
+	}
+	p.Source, err = readSource(path)
+	return p, err
+}
+
+func publishableDamages(damaged []PackageDamage) error {
+	for _, issue := range damaged {
+		if issue.legacy {
+			return fmt.Errorf("restore the old-layout package before changing registrations: %w", issue)
+		}
+	}
+	return nil
+}
+
+// FindInstalled identifies a selection for package management, even if damaged.
+func (s *Store) FindInstalled(selector string) (Package, error) {
+	installed, damaged, err := s.Inventory()
+	if err != nil {
+		return Package{}, err
+	}
+	return findSelection(installed, damaged, selector)
+}
+
+func findSelection(installed []Package, damaged []PackageDamage, selector string) (Package, error) {
+	for _, issue := range damaged {
+		installed = append(installed, issue.Package)
+	}
+	return findPackage(installed, selector)
 }
 
 func (s *Store) Find(selector string) (Package, error) {
@@ -78,6 +175,58 @@ func (s *Store) Find(selector string) (Package, error) {
 		return Package{}, err
 	}
 	return findPackage(installed, selector)
+}
+
+// FindName selects a public package name, optionally within a package type.
+func (s *Store) FindName(name, kind string) (Package, error) {
+	installed, err := s.List()
+	if err != nil {
+		return Package{}, err
+	}
+	var shortNames, aliases, fullNames []Package
+	for _, p := range installed {
+		if kind != "" && CanonicalType(p.Type) != kind {
+			continue
+		}
+		if strings.EqualFold(name, p.ID) {
+			return p, nil
+		}
+		if name == p.Name {
+			fullNames = append(fullNames, p)
+		}
+		if kind != "book" && kind != "library" {
+			continue
+		}
+		if name == p.DataName() {
+			shortNames = append(shortNames, p)
+		}
+		if kind == "book" && isBookAlias(p.ID, name) {
+			aliases = append(aliases, p)
+		}
+	}
+	for _, matches := range [][]Package{shortNames, fullNames, aliases} {
+		switch len(matches) {
+		case 0:
+			continue
+		case 1:
+			return matches[0], nil
+		default:
+			return Package{}, &AmbiguousNameError{Name: name, Matches: matches}
+		}
+	}
+	return Package{}, fmt.Errorf("package %q is not installed", name)
+}
+
+// The shipped Book IDs retain their v2 command spellings across package updates.
+func isBookAlias(id, name string) bool {
+	switch id {
+	case "4f39cb16-7e66-4fe2-9afe-fdfa56e7f005":
+		return name == "oid" || name == "snmp-oid"
+	case "8822fff1-51d7-4e2f-a5e7-dec7b344f2cf":
+		return name == "oem_ipmi" || name == "oem-ipmi"
+	default:
+		return false
+	}
 }
 
 type AmbiguousNameError struct {
@@ -117,27 +266,25 @@ func findPackage(installed []Package, selector string) (Package, error) {
 }
 
 func (s *Store) lock() (func(), error) {
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+	root := filepath.Dir(s.dir)
+	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.dir, ".mutation.lock")
-	if err := os.Mkdir(path, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("package store is busy: %s", path)
-		}
-		return nil, err
+	unlock, err := filelock.Acquire(filepath.Join(root, ".package-store.lock"))
+	if err != nil {
+		return nil, fmt.Errorf("package store lock: %w", err)
 	}
-	return func() { _ = os.Remove(path) }, nil
+	return unlock, nil
 }
 
-// Install copies a local directory or ZIP into staging, then publishes it by rename.
+// Install validates a local package before publishing its registered release.
 func (s *Store) Install(source string) (Package, error) {
 	unlock, err := s.lock()
 	if err != nil {
 		return Package{}, err
 	}
 	defer unlock()
-	stage, err := os.MkdirTemp(s.dir, ".install-")
+	stage, err := os.MkdirTemp(filepath.Dir(s.dir), ".install-")
 	if err != nil {
 		return Package{}, err
 	}
@@ -146,32 +293,32 @@ func (s *Store) Install(source string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	set, err := s.readActiveSet()
+	installed, damaged, err := s.Inventory()
 	if err != nil {
 		return Package{}, err
 	}
-	active := s.setPath(set.Active)
-	installed, err := listSet(active)
+	if err := publishableDamages(damaged); err != nil {
+		return Package{}, err
+	}
+	repair, err := repairSelectedRelease(p, damaged)
 	if err != nil {
 		return Package{}, err
 	}
-	if err := checkInstall(p, installed); err != nil {
+	next := append(installed, p)
+	if err := s.checkSet(next); err != nil {
 		return Package{}, err
 	}
-	if _, err := s.Environment(append(installed, p)); err != nil {
+	entries, err := s.publishSelections(next, damaged, map[string]bool{p.ID: repair})
+	if err != nil {
 		return Package{}, err
 	}
-	destination := filepath.Join(active, p.ID)
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return Package{}, err
-		}
-		return Package{}, fmt.Errorf("package %s already exists", p.ID)
-	}
-	if err := os.Rename(stage, destination); err != nil {
+	p.Root, err = s.payloadPath(entries[len(entries)-1], false)
+	if err != nil {
 		return Package{}, err
 	}
-	p.Root = destination
+	if err := s.writeRegistry(entries, nil, nil, true); err != nil {
+		return Package{}, err
+	}
 	return p, nil
 }
 
@@ -256,6 +403,10 @@ func checkInstall(p Package, installed []Package) error {
 			}
 		}
 	}
+	return checkPrerequisites(p, versions, schemas)
+}
+
+func checkPrerequisites(p Package, versions map[string]string, schemas map[string]int) error {
 	for id, constraint := range p.Dependencies {
 		version := versions[id]
 		if version == "" || (constraint != "*" && constraint != version) {
@@ -275,17 +426,42 @@ func checkInstall(p Package, installed []Package) error {
 	return nil
 }
 
+// Exclude packages whose dependencies cannot run while the profile is damaged.
+func availablePackages(installed []Package) []Package {
+	available := slices.Clone(installed)
+	for {
+		versions := make(map[string]string, len(available))
+		schemas := make(map[string]int, len(available))
+		for _, p := range available {
+			versions[p.ID] = p.Version
+			if p.Library != nil {
+				schemas[p.ID] = p.Library.SchemaVersion
+			}
+		}
+		next := slices.DeleteFunc(available, func(p Package) bool {
+			return checkPrerequisites(p, versions, schemas) != nil
+		})
+		if len(next) == len(available) {
+			return next
+		}
+		available = next
+	}
+}
+
 func (s *Store) Remove(selector string) error {
 	unlock, err := s.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	installed, err := s.List()
+	installed, damaged, err := s.Inventory()
 	if err != nil {
 		return err
 	}
-	p, err := findPackage(installed, selector)
+	if err := publishableDamages(damaged); err != nil {
+		return err
+	}
+	p, err := findSelection(installed, damaged, selector)
 	if err != nil {
 		return err
 	}
@@ -301,7 +477,7 @@ func (s *Store) Remove(selector string) error {
 			}
 		}
 	}
-	remaining := make([]Package, 0, len(installed)-1)
+	remaining := make([]Package, 0, len(installed))
 	for _, other := range installed {
 		if other.ID != p.ID {
 			remaining = append(remaining, other)
@@ -310,15 +486,27 @@ func (s *Store) Remove(selector string) error {
 	if _, err := s.Environment(remaining); err != nil {
 		return err
 	}
-	trash, err := os.MkdirTemp(s.dir, ".remove-")
+	var retained []registryEntry
+	if CanonicalType(p.Type) == "library" {
+		if healthy, err := findPackage(installed, p.ID); err == nil {
+			retained, err = s.publishPackages([]Package{healthy})
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, issue := range damaged {
+				if issue.Package.ID == p.ID {
+					retained = append(retained, issue.entry())
+					break
+				}
+			}
+		}
+	}
+	entries, err := s.publishSelections(remaining, damaged, map[string]bool{p.ID: true})
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(p.Root, filepath.Join(trash, p.ID)); err != nil {
-		_ = os.Remove(trash)
-		return err
-	}
-	return os.RemoveAll(trash)
+	return s.writeRegistry(entries, nil, nil, true, retained...)
 }
 
 type copier struct {
@@ -355,7 +543,7 @@ func (c *copier) file(name string, mode fs.FileMode, size int64, source io.Reade
 		return err
 	}
 	count, copyErr := io.Copy(f, io.LimitReader(source, size+1))
-	closeErr := f.Close()
+	closeErr := errors.Join(f.Sync(), f.Close())
 	if copyErr != nil {
 		return copyErr
 	}
