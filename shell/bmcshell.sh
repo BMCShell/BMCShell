@@ -68,6 +68,17 @@ _bmcshell_call() (
     else
         builtin export BMCSHELL_BRIDGE_INTERACTIVE=0
     fi
+    if [[ ${1-} == book ]]; then
+        builtin unset BMCSHELL_BOOK_TTY BMCSHELL_BOOK_STTY BMCSHELL_BOOK_BASH
+        if [[ -t 0 && -t 1 ]] && command -v cygpath >/dev/null; then
+            local book_tty book_stty book_bash
+            if book_tty=$(command tty 2>/dev/null) && [[ $book_tty == /dev/pty* ]] &&
+                book_stty=$(builtin type -P stty) && book_bash=$(command cygpath -aw -- "$BASH"); then
+                builtin export "BMCSHELL_BOOK_TTY=$book_tty" "BMCSHELL_BOOK_STTY=$book_stty"
+                builtin export "BMCSHELL_BOOK_BASH=$book_bash"
+            fi
+        fi
+    fi
     if [[ ${1-} == doctor ]]; then
         builtin unset BMCSHELL_BRIDGE_BASH
         if command -v cygpath >/dev/null; then

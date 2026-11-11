@@ -201,7 +201,13 @@ func (a *app) book(args []string) error {
 	if err != nil {
 		return err
 	}
-	return bookdb.QueryWithEnvironment(a.out, path, bookArgs, ctx["oem.sbmc.cid"], registry, values)
+	query := func(out io.Writer, display bookdb.Display) error {
+		return bookdb.QueryWithEnvironment(out, path, bookArgs, ctx["oem.sbmc.cid"], registry, values, display)
+	}
+	if len(bookArgs) == 1 && helpFlag(bookArgs[0]) {
+		return query(a.out, bookdb.Display{})
+	}
+	return a.displayBook(query)
 }
 
 func (a *app) library(args []string) error {

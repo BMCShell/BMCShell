@@ -29,3 +29,43 @@ func TestCreateAndQueryBook(t *testing.T) {
 		t.Fatal("Create overwrote an existing Book")
 	}
 }
+
+func TestDetailPresentationUsesContentFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "example.book.db")
+	body := "## 说明\n\n```json\n{\n  \"Enabled\": true\n}\n```"
+	if err := Create(path, []Entry{{ID: "1", Title: "Example", Body: body}}); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--id", "1"}
+	var out bytes.Buffer
+	if err := QueryWithEnvironment(&out, path, args, "", nil, nil, Display{Width: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), body) {
+		t.Fatalf("plain detail changed:\n%s", &out)
+	}
+	db, err := open(path, "rw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, updateErr := db.Exec("UPDATE book_meta SET content_format = 'markdown'")
+	if err := errors.Join(updateErr, db.Close()); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := Query(&out, path, args, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), body) {
+		t.Fatalf("redirected Markdown changed:\n%s", &out)
+	}
+	out.Reset()
+	if err := QueryWithEnvironment(&out, path, args, "", nil, nil, Display{Width: 60}); err != nil {
+		t.Fatal(err)
+	}
+	rendered := out.String()
+	if strings.Contains(rendered, "## 说明") || strings.Contains(rendered, "```") ||
+		!strings.Contains(rendered, "说明") || !strings.Contains(rendered, "  \"Enabled\": true") {
+		t.Fatalf("unexpected rendered detail:\n%s", rendered)
+	}
+}

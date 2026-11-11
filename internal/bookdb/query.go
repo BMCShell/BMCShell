@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"bmcshell/internal/envregistry"
+	"bmcshell/internal/render"
 )
 
 const bodyLimit = 2 << 20
@@ -21,6 +22,13 @@ type operation struct {
 	where  string
 	values []any
 	detail bool
+}
+
+type Display struct {
+	// Width enables terminal Markdown rendering when positive.
+	Width int
+	// ListHeader can mark the first row for a pager. It writes the row itself.
+	ListHeader func(string) error
 }
 
 // Query renders a list, literal search, or metadata-defined detail lookup.
@@ -37,11 +45,11 @@ func Query(out io.Writer, path string, args []string, cid string) error {
 			}
 		}
 	}
-	return QueryWithEnvironment(out, path, args, cid, registry, values)
+	return QueryWithEnvironment(out, path, args, cid, registry, values, Display{})
 }
 
 // QueryWithEnvironment renders only the registered public values supplied by the caller.
-func QueryWithEnvironment(out io.Writer, path string, args []string, cid string, registry envregistry.Registry, values map[string]string) error {
+func QueryWithEnvironment(out io.Writer, path string, args []string, cid string, registry envregistry.Registry, values map[string]string, display Display) error {
 	db, meta, err := openBook(path)
 	if err != nil {
 		return err
@@ -77,7 +85,15 @@ func QueryWithEnvironment(out io.Writer, path string, args []string, cid string,
 		for i, field := range meta.List {
 			titles[i] = meta.title(field)
 		}
-		meta.writeListRow(out, titles)
+		header := meta.listRow(titles)
+		if display.ListHeader != nil {
+			err = display.ListHeader(header)
+		} else {
+			_, err = io.WriteString(out, header)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	matched := false
 	for rows.Next() {
@@ -94,7 +110,9 @@ func QueryWithEnvironment(out io.Writer, path string, args []string, cid string,
 			}
 		}
 		if !op.detail {
-			meta.writeListRow(out, shown)
+			if _, err := io.WriteString(out, meta.listRow(shown)); err != nil {
+				return err
+			}
 			continue
 		}
 		length, _ := values[len(meta.List)+1].(int64)
@@ -110,16 +128,24 @@ func QueryWithEnvironment(out io.Writer, path string, args []string, cid string,
 			return err
 		}
 		for i, field := range meta.List {
-			fmt.Fprintf(out, "%s: %s\n", meta.title(field), shown[i])
+			if _, err := fmt.Fprintf(out, "%s: %s\n", meta.title(field), shown[i]); err != nil {
+				return err
+			}
 		}
-		fmt.Fprintln(out, safe(body))
-		fmt.Fprintln(out)
+		if display.Width > 0 && meta.ContentFormat == "markdown" {
+			body = render.Markdown(body, display.Width)
+		}
+		if _, err := fmt.Fprintf(out, "%s\n\n", safe(body)); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	if !matched {
-		fmt.Fprintln(out, "未找到匹配条目。")
+		if _, err := fmt.Fprintln(out, "未找到匹配条目。"); err != nil {
+			return err
+		}
 		return ErrNoMatch
 	}
 	return nil
@@ -314,7 +340,7 @@ func safe(value string) string {
 	return result.String()
 }
 
-func (m metadata) writeListRow(out io.Writer, fields []string) {
+func (m metadata) listRow(fields []string) string {
 	columns := make([]string, len(fields))
 	for i, field := range fields {
 		width := m.Options[m.List[i]].Width
@@ -323,28 +349,17 @@ func (m metadata) writeListRow(out io.Writer, fields []string) {
 		}
 		columns[i] = fit(strings.ReplaceAll(field, "\n", " "), width)
 	}
-	fmt.Fprintln(out, strings.TrimRight(strings.Join(columns, "  "), " "))
+	return strings.TrimRight(strings.Join(columns, "  "), " ") + "\n"
 }
 
 func fit(text string, width int) string {
 	used := 0
 	for i, r := range text {
-		cells := runeWidth(r)
+		cells := render.RuneWidth(r)
 		if used+cells > width || (used+cells == width && i+utf8.RuneLen(r) < len(text)) {
 			return text[:i] + "…" + strings.Repeat(" ", width-used-1)
 		}
 		used += cells
 	}
 	return text + strings.Repeat(" ", width-used)
-}
-
-func runeWidth(r rune) int {
-	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
-		return 0
-	}
-	if unicode.In(r, unicode.Han, unicode.Hangul, unicode.Hiragana, unicode.Katakana) ||
-		(r >= 0x3000 && r <= 0x303f) || (r >= 0xff01 && r <= 0xff60) {
-		return 2
-	}
-	return 1
 }
