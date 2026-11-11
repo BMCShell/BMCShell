@@ -477,7 +477,7 @@ _bmcshell_complete() {
                 ;;
             status|tool) words+=' --env' ;;
             proxy) words+=' on off -m' ;;
-            setting) words+=' --get --set --reset --check' ;;
+            setting) words+=' --get --set --reset --check --insecure' ;;
             update) words+=' --file --version' ;;
         esac
     fi

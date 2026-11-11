@@ -3,6 +3,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"sync"
 
 	"bmcshell/internal/filelock"
 	"bmcshell/internal/proxy"
@@ -28,9 +30,10 @@ const (
 var sourceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 
 type Source struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Official bool   `json:"official,omitempty"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Official    bool   `json:"official,omitempty"`
+	InsecureTLS bool   `json:"insecureTls,omitempty"`
 }
 
 type RefreshResult struct {
@@ -40,8 +43,9 @@ type RefreshResult struct {
 }
 
 type Store struct {
-	root   string
-	client *http.Client
+	root              string
+	client            *http.Client
+	insecureTransport func() *http.Transport
 }
 
 func Open(home string) *Store {
@@ -51,7 +55,19 @@ func Open(home string) *Store {
 func OpenWithProxy(home, address string) *Store {
 	client := client
 	client.Transport = proxy.HTTPTransport(address)
-	return &Store{root: filepath.Join(home, "catalog"), client: &client}
+	return &Store{
+		root:   filepath.Join(home, "catalog"),
+		client: &client,
+		insecureTransport: sync.OnceValue(func() *http.Transport {
+			transport := client.Transport.(*http.Transport).Clone()
+			if transport.TLSClientConfig == nil {
+				transport.TLSClientConfig = &tls.Config{}
+			}
+			// This transport is selected only for the explicitly configured private origin.
+			transport.TLSClientConfig.InsecureSkipVerify = true
+			return transport
+		}),
+	}
 }
 
 func (s *Store) Sources() ([]Source, error) {
@@ -166,12 +182,13 @@ func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, erro
 }
 
 type cachedIndex struct {
-	URL  string `json:"url"`
-	Data []byte `json:"data"`
+	URL         string `json:"url"`
+	Data        []byte `json:"data"`
+	InsecureTLS bool   `json:"insecureTls,omitempty"`
 }
 
 func (s *Store) refreshSource(ctx context.Context, source Source) (int, error) {
-	response, err := fetch(ctx, s.client, source.URL, maxIndexBytes)
+	response, err := fetch(ctx, s.sourceClient(source), source.URL, maxIndexBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -192,7 +209,7 @@ func (s *Store) refreshSource(ctx context.Context, source Source) (int, error) {
 		if !slices.Contains(sources, source) {
 			return errors.New("source changed during index refresh")
 		}
-		return writeJSON(s.indexPath(source.Name), cachedIndex{URL: source.URL, Data: data})
+		return writeJSON(s.indexPath(source.Name), cachedIndex{URL: source.URL, Data: data, InsecureTLS: source.InsecureTLS})
 	}); err != nil {
 		return 0, err
 	}
@@ -218,7 +235,7 @@ func (s *Store) Entries() ([]Entry, error) {
 		if err := json.Unmarshal(data, &index); err != nil {
 			return nil, fmt.Errorf("invalid cached index for %s; refresh the source", source.Name)
 		}
-		if index.URL != source.URL {
+		if index.URL != source.URL || index.InsecureTLS != source.InsecureTLS {
 			continue
 		}
 		cached, err := parseIndex(source, index.Data)
@@ -238,9 +255,12 @@ func (source Source) validate() error {
 	if !sourceName.MatchString(source.Name) || source.Official != (source.Name == "official") {
 		return fmt.Errorf("invalid software source name %q; official is reserved for the official source", source.Name)
 	}
-	_, err := networkURL(source.URL)
+	u, err := networkURL(source.URL)
 	if err != nil {
 		return fmt.Errorf("source %s: %w", source.Name, err)
+	}
+	if source.InsecureTLS && !privateTLSOrigin(u).IsValid() {
+		return fmt.Errorf("source %s: --insecure requires an HTTPS URL with a private IP literal", source.Name)
 	}
 	return nil
 }

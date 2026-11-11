@@ -39,6 +39,7 @@ type Entry struct {
 	LibrarySchemas       map[string]packages.LibrarySchemaRange `json:"librarySchemas,omitempty"`
 	LibraryMigrations    map[string]string                      `json:"libraryMigrations,omitempty"`
 	Source               string                                 `json:"-"`
+	source               Source
 }
 
 type indexFile struct {
@@ -96,6 +97,7 @@ func parseIndex(source Source, data []byte) ([]Entry, error) {
 		entry.URL = artifact
 		entry.SHA256 = strings.ToLower(entry.SHA256)
 		entry.Source = source.Name
+		entry.source = source
 	}
 	return index.Packages, nil
 }

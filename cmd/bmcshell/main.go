@@ -6,7 +6,7 @@ import (
 	"bmcshell/internal/cli"
 )
 
-var version = "3.0.0-dev.8"
+var version = "3.0.0-dev.9"
 
 func main() {
 	os.Exit(cli.Run(version, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))

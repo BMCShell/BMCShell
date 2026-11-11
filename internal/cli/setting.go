@@ -104,7 +104,7 @@ func (a *app) settingsMenu(cfg settings.Config) error {
 		return err
 	}
 	for _, source := range sources {
-		fmt.Fprintf(a.out, "%s%s = %s\n", sourcePrefix, source.Name, redactSource(source.URL))
+		fmt.Fprintf(a.out, "%s%s = %s%s\n", sourcePrefix, source.Name, redactSource(source.URL), sourceSettingOption(source))
 	}
 	if !terminalInput(a.in) {
 		return nil
@@ -258,21 +258,21 @@ func (a *app) sourceSetting(action, name string, args []string) error {
 	if err != nil {
 		return err
 	}
-	var before string
+	var before catalog.Source
 	for _, source := range sources {
 		if source.Name == name {
-			before = source.URL
+			before = source
 			break
 		}
 	}
-	var after string
+	var after catalog.Source
 	switch {
 	case action == "--get" && len(args) == 0:
-		fmt.Fprintln(a.out, redactSource(before))
+		fmt.Fprintln(a.out, redactSource(before.URL))
 		return nil
-	case action == "--set" && len(args) == 1:
-		after = args[0]
-		if err := repository.SetSource(catalog.Source{Name: name, URL: after, Official: name == "official"}); err != nil {
+	case action == "--set" && (len(args) == 1 || len(args) == 2 && args[1] == "--insecure"):
+		after = catalog.Source{Name: name, URL: args[0], Official: name == "official", InsecureTLS: len(args) == 2}
+		if err := repository.SetSource(after); err != nil {
 			return err
 		}
 	case action == "--reset" && len(args) == 0:
@@ -282,8 +282,16 @@ func (a *app) sourceSetting(action, name string, args []string) error {
 	default:
 		return errors.New("see bmc setting --help")
 	}
-	fmt.Fprintf(a.out, "%s%s: %q → %q\n", sourcePrefix, name, redactSource(before), redactSource(after))
+	fmt.Fprintf(a.out, "%s%s: %q%s → %q%s\n", sourcePrefix, name,
+		redactSource(before.URL), sourceSettingOption(before), redactSource(after.URL), sourceSettingOption(after))
 	return nil
+}
+
+func sourceSettingOption(source catalog.Source) string {
+	if source.InsecureTLS {
+		return " --insecure"
+	}
+	return ""
 }
 
 func redactSource(raw string) string {

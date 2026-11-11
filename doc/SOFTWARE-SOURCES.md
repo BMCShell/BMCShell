@@ -18,6 +18,15 @@ bmc setting --reset plugin.source.internal
 
 安装和升级使用完整包名，安装可指定版本。搜索按内部 UUID 合并同一包的结果。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。也可以用 `bmc plugin install --file <目录或 ZIP>` 安装本地包。
 
+默认校验 HTTPS 证书。使用 RFC 1918 私有 IPv4 或 IPv6 ULA 地址配置内网源时，可以显式添加 `--insecure`。它只影响该源配置地址的同一 HTTPS IP 和端口，跨源下载和重定向继续校验证书。ZIP 的 SHA256 和包内清单仍会核对。
+
+```bash
+bmc setting --set plugin.source.internal 'https://10.0.0.10:10100/s/<索引令牌>/download' --insecure
+bmc plugin update
+```
+
+用相同 URL 重新设置且省略 `--insecure`，即可恢复严格校验。切换选项后需要刷新索引。
+
 Library 数据随发布包安装或升级，并按工作库、旧版基准和新版发布数据进行差异合并。主程序更新默认读取主仓 GitHub Releases。[Library 发布与升级](LIBRARY-PACKAGE.md)
 
 ## 维护公开源

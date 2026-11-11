@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,54 @@ func networkURL(raw string) (*url.URL, error) {
 		}
 	}
 	return nil, errors.New("software source URLs must use HTTPS (loopback HTTP is also allowed)")
+}
+
+func privateTLSOrigin(u *url.URL) netip.AddrPort {
+	if u.Scheme != "https" {
+		return netip.AddrPort{}
+	}
+	address, err := netip.ParseAddr(u.Hostname())
+	if err != nil || address.Zone() != "" || !address.IsPrivate() {
+		return netip.AddrPort{}
+	}
+	port := uint64(443)
+	if u.Port() != "" {
+		port, err = strconv.ParseUint(u.Port(), 10, 16)
+		if err != nil || port == 0 {
+			return netip.AddrPort{}
+		}
+	}
+	return netip.AddrPortFrom(address.Unmap(), uint16(port))
+}
+
+type sourceTransport struct {
+	origin           netip.AddrPort
+	strict, insecure http.RoundTripper
+}
+
+func (t sourceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// The client invokes RoundTrip again for each redirect.
+	if privateTLSOrigin(req.URL) == t.origin {
+		return t.insecure.RoundTrip(req)
+	}
+	return t.strict.RoundTrip(req)
+}
+
+func (s *Store) sourceClient(source Source) *http.Client {
+	if !source.InsecureTLS {
+		return s.client
+	}
+	u, err := networkURL(source.URL)
+	if err != nil {
+		return s.client
+	}
+	origin := privateTLSOrigin(u)
+	if !origin.IsValid() {
+		return s.client
+	}
+	client := *s.client
+	client.Transport = sourceTransport{origin: origin, strict: client.Transport, insecure: s.insecureTransport()}
+	return &client
 }
 
 var client = http.Client{
@@ -98,7 +147,16 @@ func Download(ctx context.Context, entry Entry, dir string) (string, error) {
 }
 
 func (s *Store) Download(ctx context.Context, entry Entry, dir string) (string, error) {
-	return download(ctx, s.client, entry, dir)
+	if entry.source.InsecureTLS {
+		sources, err := s.Sources()
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(sources, entry.source) {
+			return "", errors.New("source changed before package download")
+		}
+	}
+	return download(ctx, s.sourceClient(entry.source), entry, dir)
 }
 
 func download(ctx context.Context, client *http.Client, entry Entry, dir string) (string, error) {

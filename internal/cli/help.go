@@ -17,7 +17,7 @@ var builtinHelp = map[string]render.Topic{
 	"library": {Summary: "列出和管理可操作的业务库。", Usage: []string{"bmc library [-l|--list]", "bmc library <库名>"}},
 	"plugin":  {Summary: "搜索、安装、升级和卸载扩展包。", Usage: []string{"bmc plugin list [type]", "bmc plugin update", "bmc plugin search <关键词>", "bmc plugin install <name[@version]>", "bmc plugin install --file <路径>", "bmc plugin upgrade [name]", "bmc plugin remove <name>"}},
 	"proxy":   {Summary: "设置当前终端和 BMCShell 的 SOCKS5 代理。", Usage: []string{"bmc proxy", "bmc proxy on|off", "bmc proxy -m 127.0.0.1:1081"}},
-	"setting": {Summary: "查看和修改框架及插件设置。", Usage: []string{"bmc setting", "bmc setting --get <key>", "bmc setting --set <key> <value>", "bmc setting --reset [key]", "bmc setting --check"}},
+	"setting": {Summary: "查看和修改框架及插件设置。", Usage: []string{"bmc setting", "bmc setting --get <key>", "bmc setting --set <key> <value>", "bmc setting --set plugin.source.<name> <private-IP HTTPS URL> [--insecure]", "bmc setting --reset [key]", "bmc setting --check"}},
 	"status":  {Summary: "查看当前目标 IP 和已登记的环境变量。", Usage: []string{"bmc status [--env]"}},
 	"tool":    {Summary: "查看扩展命令、可用状态和来源。", Usage: []string{"bmc tool [-l|--list]", "bmc tool -a|--all", "bmc tool <工具名> [-h|--help]"}},
 	"update":  {Summary: "检查并更新框架。", Usage: []string{"bmc update", "bmc update --version <version>", "bmc update --file <发布包>"}},

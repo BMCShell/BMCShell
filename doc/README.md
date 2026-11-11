@@ -53,7 +53,7 @@ source ./shell/bmcshell.sh
 打包脚本默认从仓库读取 `build/BMCShell.exe` 和 `shell/bmcshell.sh`。可用 `-Binary` 和 `-ShellBridge` 指定其他文件。运行环境为 PowerShell 7.4 或更高版本。
 
 ```powershell
-./scripts/pack-release.ps1 -Version 3.0.0-dev.8
+./scripts/pack-release.ps1 -Version 3.0.0-dev.9
 ```
 
 脚本验证输入为 Windows x64 可执行文件，核对程序自报版本和 `-Version` 一致，再将 Windows ZIP 和含 SHA256 的发布清单写入 `dist/`。解压后的 `BMCShell/` 使用 `bin/bmcshell.sh` 作为 Bash 启动入口，核心程序位于 `bin/releases/<版本>/`。包内还收录文档、第三方声明和已选定的 `LICENSE` 文件。需要组合分发时，可用 `-Scaffold` 指定独立仓库发布的脚手架可执行文件。
@@ -170,5 +170,5 @@ BMCSHELL_HOME="$(cygpath -w "$(mktemp -d)")" bash tests/smoke.sh
 打包后在 PowerShell 用上一份可用便携版 ZIP 做发布验收。将两个 Bash 路径替换为本机路径。
 
 ```powershell
-./tests/smoke-release.ps1 -Archive ./dist/BMCShell-3.0.0-dev.8-windows-amd64.zip -PreviousArchive ./dist/BMCShell-3.0.0-dev.7-windows-amd64.zip -GitBash 'C:/Environment/Git/bin/bash.exe' -Msys2Bash 'C:/Environment/msys64/usr/bin/bash.exe'
+./tests/smoke-release.ps1 -Archive ./dist/BMCShell-3.0.0-dev.9-windows-amd64.zip -PreviousArchive ./dist/BMCShell-3.0.0-dev.8-windows-amd64.zip -GitBash 'C:/Environment/Git/bin/bash.exe' -Msys2Bash 'C:/Environment/msys64/usr/bin/bash.exe'
 ```
