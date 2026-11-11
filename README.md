@@ -3,6 +3,7 @@
 BMCShell 3.0 主程序仓库。当前开发版包含 Go 核心、Bash 会话适配、本地包管理、帮助、设置和数据查询。各扩展使用自己的仓库和发布版本。
 
 - [框架介绍](doc/README.md)
+- [框架发行版](https://github.com/BMCShell/BMCShell/releases) · [下载发行版索引](https://github.com/BMCShell/BMCShell/releases/download/release-index/index.json)
 - 源码仓打包入口 `scripts/pack-release.ps1`
 - 插件脚手架在独立的 `BMCShell-Scaffold` 仓库构建和发布
 
