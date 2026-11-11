@@ -131,12 +131,12 @@ SNMP 分组登记 `snmp.enterprises` / `BMCSHELL_SNMP_ENTERPRISES`。完整 OID 
 
 用 `bmc update` 从主仓库的 GitHub Releases 检查新版本，或用 `bmc update --version <version>` 选择指定的新版布局发布包。使用旧版布局的 dev.4 用户首次切换时，解压新版 ZIP。要迁移旧数据，关闭旧版终端后，将旧版 `bmc doctor -d` 显示的 `Data` 目录中的内容复制到新安装根目录或指定的 `BMCSHELL_HOME`。新版可读取旧布局，并在相关写入时登记到新版布局。回到 dev.4 时使用原安装和独立的旧版数据目录。
 
-发行版索引记录 GitHub 已发布的框架版本。`latest` 是最高版本，包含预发行版。`latestStable` 是最高正式版本，没有正式版时为 `null`。`releases` 按版本从新到旧排列，每个版本列出发布标签、时间、ZIP 和校验清单地址以及 SHA-256。索引由 GitHub Actions 刷新。[下载框架发行版索引](https://github.com/BMCShell/BMCShell/releases/download/release-index/index.json)
+发行版索引记录 GitHub 已发布的框架版本。每个版本的 `channel` 为 `stable`（正式版）或 `dev`（开发版）。正式版的版本号没有预发行后缀，且 GitHub 未将其标为预发行版。`latestStable` 和 `latestDev` 分别指向两种类型中的最新版本，缺少对应类型时为 `null`。`latest` 是两种类型中版本号最高的版本。`releases` 按版本从新到旧排列，每个版本列出发布标签、时间、ZIP 和校验清单地址以及 SHA-256。索引由 GitHub Actions 刷新。[下载框架发行版索引](https://github.com/BMCShell/BMCShell/releases/download/release-index/index.json)
 
 ```powershell
 $index = Invoke-RestMethod 'https://github.com/BMCShell/BMCShell/releases/download/release-index/index.json'
 $index.releases[0].artifacts[0].url
-$index.releases | Select-Object version, publishedAt, prerelease
+$index.releases | Select-Object version, channel, publishedAt
 ```
 
 离线更新使用 `bmc update --file <发布包>`。将发布 ZIP 和对应的 `.manifest.json` 文件放在同一目录。主程序校验 ZIP 后将新版写入独立的版本目录，核对暂存程序报告的版本，再切换 `bin/active`。重新打开 Bash 终端，沿用原来的加载路径即可进入所选版本。

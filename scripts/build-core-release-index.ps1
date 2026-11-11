@@ -101,13 +101,14 @@ for ($page = 1; ; $page++) {
         $artifact = Get-CoreArtifact $release $version
         if (!$artifact) { continue }
 
+        $channel = if (!$release.prerelease -and !$sortVersion.PreReleaseLabel) { 'stable' } else { 'dev' }
         $entries.Add([pscustomobject]@{
             SortVersion = $sortVersion
-            Stable = !$release.prerelease -and !$sortVersion.PreReleaseLabel
             Release = [ordered]@{
                 version = $version
                 tag = $tag
                 publishedAt = ([DateTimeOffset] $release.published_at).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                channel = $channel
                 prerelease = [bool] $release.prerelease
                 releaseUrl = "https://github.com/$repository/releases/tag/$([uri]::EscapeDataString($tag))"
                 artifacts = @($artifact)
@@ -119,12 +120,14 @@ for ($page = 1; ; $page++) {
 
 $ordered = @($entries | Sort-Object -Stable -Property SortVersion -Descending)
 $latest = $ordered | Select-Object -First 1
-$latestStable = $ordered | Where-Object Stable | Select-Object -First 1
+$latestStable = $ordered | Where-Object { $_.Release.channel -ceq 'stable' } | Select-Object -First 1
+$latestDev = $ordered | Where-Object { $_.Release.channel -ceq 'dev' } | Select-Object -First 1
 $index = [ordered]@{
     schema = 1
     product = 'BMCShell'
     latest = $latest.Release.version
     latestStable = $latestStable.Release.version
+    latestDev = $latestDev.Release.version
     releases = @($ordered | ForEach-Object { $_.Release })
 }
 
