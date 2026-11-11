@@ -1,3 +1,20 @@
+<#
+.SYNOPSIS
+    打包 BMCShell 便携版 ZIP，并生成发布校验文件。
+.PARAMETER Version
+    必填。与 BMCShell.exe 报告的版本一致的语义化版本号。
+.PARAMETER Binary
+    框架可执行文件。默认为本仓库的 build/BMCShell.exe。
+.PARAMETER ShellBridge
+    Bash 适配脚本。默认为本仓库的 shell/bmcshell.sh。
+.PARAMETER Scaffold
+    可选。要随框架一同打包的脚手架程序。
+.PARAMETER OutputDirectory
+    输出目录。默认为本仓库的 dist。
+.EXAMPLE
+    ./scripts/pack-release.ps1 -Version 3.0.0-dev.9 -OutputDirectory ./dist
+#>
+
 #requires -Version 7.4
 [CmdletBinding()]
 param(
@@ -17,7 +34,7 @@ $ErrorActionPreference = 'Stop'
 function Resolve-ReleaseFile([string] $Path) {
     $file = Get-Item -LiteralPath $Path
     if ($file -isnot [System.IO.FileInfo]) {
-        throw "Expected a file: $Path"
+        throw "路径必须指向文件：$Path"
     }
     return $file.FullName
 }
@@ -49,16 +66,16 @@ function Assert-WindowsX64([string] $Path) {
     try {
         $stream = $reader.BaseStream
         if ($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5A4D) {
-            throw "Expected a Windows executable: $Path"
+            throw "文件必须是 Windows 可执行程序：$Path"
         }
         $stream.Position = 0x3C
         $peOffset = $reader.ReadInt32()
         if ($peOffset -lt 64 -or $peOffset -gt ($stream.Length - 6)) {
-            throw "Invalid executable header: $Path"
+            throw "可执行文件头无效：$Path"
         }
         $stream.Position = $peOffset
         if ($reader.ReadUInt32() -ne 0x00004550 -or $reader.ReadUInt16() -ne 0x8664) {
-            throw "Expected a Windows x64 executable: $Path"
+            throw "文件必须是 Windows x64 可执行程序：$Path"
         }
     } finally {
         $reader.Dispose()
@@ -78,12 +95,12 @@ function Assert-ReleaseVersion([string] $Path, [string] $ExpectedVersion) {
         $stderr = $process.StandardError.ReadToEndAsync()
         if (!$process.WaitForExit(10000)) {
             $process.Kill($true)
-            throw 'BMCShell.exe did not report its version within 10 seconds.'
+            throw 'BMCShell.exe 未在 10 秒内输出版本号。'
         }
         $reported = $stdout.GetAwaiter().GetResult().Trim()
         $null = $stderr.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0 -or $reported -cne "BMCShell $ExpectedVersion") {
-            throw "Expected BMCShell.exe to report 'BMCShell $ExpectedVersion'. Rebuild the executable with the release version."
+            throw "BMCShell.exe 应输出 'BMCShell $ExpectedVersion'。请用发布版本号重新构建程序。"
         }
     } finally {
         $process.Dispose()
@@ -130,7 +147,7 @@ $baseName = "BMCShell-$Version-$Platform"
 $archivePath = Join-Path $output "$baseName.zip"
 $manifestPath = Join-Path $output "$baseName.manifest.json"
 if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath $manifestPath)) {
-    throw "A release already exists for $Version / $Platform. Choose a new version or output directory."
+    throw "版本 $Version 的 $Platform 发行包已存在。请指定新版本或其他输出目录。"
 }
 
 $stagingName = [guid]::NewGuid().ToString('N')

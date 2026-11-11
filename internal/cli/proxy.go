@@ -9,7 +9,7 @@ import (
 	"bmcshell/internal/settings"
 )
 
-const proxyUsage = "usage: bmc proxy [on|off|-m 127.0.0.1:port]"
+const proxyUsage = "代理参数无效。运行 bmc proxy --help 查看用法"
 
 type proxyConfig struct {
 	active    string
@@ -85,7 +85,7 @@ func canonicalProxyAddress(value string) (string, error) {
 	}
 	address, err := settings.ProxyAddress(value)
 	if err != nil || address != value {
-		return "", errors.New("invalid BMCShell SOCKS5 proxy address")
+		return "", errors.New("BMCShell 的 SOCKS5 代理地址无效")
 	}
 	return address, nil
 }
@@ -112,7 +112,7 @@ func (a *app) proxyConfigBridge(args []string) error {
 func (a *app) proxyAddressBridge(args []string) error {
 	// Older Bash tool packages still pass the protocol name.
 	if len(args) > 1 || (len(args) == 1 && args[0] != "ipmi") {
-		return errors.New("invalid proxy address request")
+		return errors.New("代理地址请求参数无效")
 	}
 	address, err := a.proxyAddress()
 	if err != nil {
@@ -124,7 +124,7 @@ func (a *app) proxyAddressBridge(args []string) error {
 
 func (a *app) proxyRunBridge(args []string) error {
 	if len(args) == 0 {
-		return errors.New("missing proxy protocol (ssh, ipmi, or snmp)")
+		return errors.New("请指定代理协议 ssh、ipmi 或 snmp")
 	}
 	address, err := a.proxyAddress()
 	// OpenSSH and standalone plugins can launch the relay directly.
@@ -137,7 +137,7 @@ func (a *app) proxyRunBridge(args []string) error {
 		return err
 	}
 	if address == "" {
-		return errors.New("SOCKS5 proxy is disabled")
+		return errors.New("SOCKS5 代理已关闭")
 	}
 	return proxy.Run(address, args[0], args[1:], a.in, a.out, a.errOut)
 }

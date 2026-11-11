@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-var ErrBusy = errors.New("lock is busy")
+var ErrBusy = errors.New("锁正被占用")
 
 // Acquire holds an exclusive, nonblocking OS lock until the caller releases
 // it or the process exits. Leave the lock file in place so every process

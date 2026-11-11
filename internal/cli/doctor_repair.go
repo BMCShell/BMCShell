@@ -40,16 +40,16 @@ func msys2RepairActions(records []packages.RepairRecord, missing map[string]bool
 func (a *app) repairMissing(records []packages.RepairRecord, missing map[string]bool) error {
 	actions := msys2RepairActions(records, missing)
 	if len(actions) == 0 {
-		fmt.Fprintln(a.out, "No automatic repair is available for these dependencies.")
+		fmt.Fprintln(a.out, "这些依赖暂无可用的自动修复方式。")
 		return nil
 	}
 	pacman := msys2Pacman(os.Getenv("BMCSHELL_BRIDGE_BASH"), os.Getenv("PATH"))
 	if pacman == "" {
-		fmt.Fprintln(a.out, "Automatic installation requires an MSYS2 Bash terminal with its own package manager on PATH.")
+		fmt.Fprintln(a.out, "自动安装需要在 MSYS2 Bash 中运行，并将其包管理器 pacman 加入 PATH。")
 		return nil
 	}
 	if !terminalInput(a.in) {
-		fmt.Fprintln(a.out, "Open an interactive terminal to select repairs.")
+		fmt.Fprintln(a.out, "请在交互终端中选择要修复的依赖。")
 		return nil
 	}
 	names := sortedKeys(actions)
@@ -57,7 +57,7 @@ func (a *app) repairMissing(records []packages.RepairRecord, missing map[string]
 		fmt.Fprintf(a.out, "%d. %s (%s) [%s]\n", i+1, name,
 			strings.Join(sortedKeys(actions[name].dependencies), ", "), strings.Join(sortedKeys(actions[name].sources), ", "))
 	}
-	fmt.Fprint(a.out, "Select packages by number, separated by spaces (Enter to cancel): ")
+	fmt.Fprint(a.out, "请输入要安装的包编号，多个编号以空格分隔，直接回车取消：")
 	line, readErr := bufio.NewReader(a.in).ReadString('\n')
 	if readErr != nil && line == "" {
 		return nil
@@ -80,7 +80,7 @@ func (a *app) repairMissing(records []packages.RepairRecord, missing map[string]
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = a.in, a.out, a.errOut
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("MSYS2 repair: %w", err)
+		return fmt.Errorf("MSYS2 自动修复失败：%w", err)
 	}
 	var unresolved []string
 	for _, name := range selected {
@@ -91,9 +91,9 @@ func (a *app) repairMissing(records []packages.RepairRecord, missing map[string]
 		}
 	}
 	if len(unresolved) > 0 {
-		return fmt.Errorf("dependency remains unavailable after repair: %s", strings.Join(unresolved, ", "))
+		return fmt.Errorf("修复后仍找不到依赖：%s", strings.Join(unresolved, ", "))
 	}
-	fmt.Fprintln(a.out, "Selected dependencies are available.")
+	fmt.Fprintln(a.out, "所选依赖已可用。")
 	return nil
 }
 
@@ -103,7 +103,7 @@ func selectedRepairs(names []string, line string) ([]string, error) {
 	for _, token := range strings.Fields(line) {
 		index, err := strconv.Atoi(token)
 		if err != nil || index < 1 || index > len(names) {
-			return nil, errors.New("invalid repair selection")
+			return nil, errors.New("修复选项的编号无效")
 		}
 		if !seen[index] {
 			selected = append(selected, names[index-1])

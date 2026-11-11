@@ -22,7 +22,7 @@ func (a *app) pluginUpdate() error {
 	results, err := repository.Refresh(context.Background(), "")
 	for _, result := range results {
 		if result.Err == nil {
-			fmt.Fprintf(a.out, "%s: %d indexed package versions\n", result.Source, result.Count)
+			fmt.Fprintf(a.out, "%s：已缓存 %d 个包版本\n", result.Source, result.Count)
 		}
 	}
 	return err
@@ -35,7 +35,7 @@ func (a *app) pluginSearch(keyword string) error {
 	}
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	if keyword == "" {
-		return errors.New("search requires a keyword")
+		return errors.New("请输入要搜索的包名关键词。运行 bmc plugin search --help 查看用法")
 	}
 	matches := newestEntries(entries, func(entry catalog.Entry) bool {
 		return strings.Contains(strings.ToLower(entry.Name), keyword)
@@ -72,7 +72,7 @@ func (a *app) catalog() (*catalog.Store, error) {
 	return catalog.OpenWithProxy(a.home, address), nil
 }
 
-func (a *app) pluginFromCatalog(selector string, upgrading bool) error {
+func (a *app) pluginFromCatalog(upgrading bool, selectors ...string) error {
 	repository, err := a.catalog()
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (a *app) pluginFromCatalog(selector string, upgrading bool) error {
 		return err
 	}
 	if len(entries) == 0 {
-		return errors.New("no compatible catalog entries; configure a source with bmc setting and run bmc plugin update")
+		return errors.New("索引中没有兼容的扩展包。请通过 bmc setting 配置软件源，再运行 bmc plugin update")
 	}
 	installed, err := a.store.List()
 	if err != nil {
@@ -91,63 +91,79 @@ func (a *app) pluginFromCatalog(selector string, upgrading bool) error {
 	input, interactive := bufio.NewReader(a.in), terminalInput(a.in)
 	var plan []catalog.Entry
 	if upgrading {
+		var selector string
+		if len(selectors) != 0 {
+			selector = selectors[0]
+		}
 		plan, err = a.planCatalogUpgrade(input, interactive, entries, installed, selector)
 	} else {
-		plan, err = a.planCatalogInstall(input, interactive, entries, installed, selector)
+		plan, err = a.planCatalogInstall(input, interactive, entries, installed, selectors)
 	}
 	if err != nil || len(plan) == 0 {
 		return err
 	}
 	a.printCatalogPlan(plan, installed)
 	if upgrading && interactive {
-		fmt.Fprint(a.out, "Apply this upgrade [y/N]? ")
+		fmt.Fprint(a.out, "应用以上升级？[y/N] ")
 		if choice := readChoice(input); choice != "y" && choice != "yes" {
-			fmt.Fprintln(a.out, "Upgrade canceled.")
+			fmt.Fprintln(a.out, "已取消升级。")
 			return nil
 		}
 	}
 	return a.applyCatalogPlan(repository, plan, installed, input, interactive)
 }
 
-func (a *app) planCatalogInstall(input *bufio.Reader, interactive bool, entries []catalog.Entry, installed []packages.Package, selector string) ([]catalog.Entry, error) {
-	name, version, pinned := strings.Cut(selector, "@")
-	if name == "" || pinned && packages.ValidateVersion(version) != nil {
-		return nil, errors.New("usage: bmc plugin install <name[@version]>")
-	}
-	matches := newestEntries(entries, func(entry catalog.Entry) bool {
-		return entry.Name == name && (!pinned || entry.Version == version)
-	})
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("package %q was not found; see bmc plugin search", selector)
-	}
-	var selected int
-	if len(matches) > 1 {
-		for i, match := range matches {
-			fmt.Fprintf(a.out, "%d. %s@%s (%s, %s)\n", i+1, match.Name, match.Version, packages.CanonicalType(match.Type), match.Source)
-		}
-		if !interactive {
-			return nil, fmt.Errorf("ambiguous package name %q; select the package in an interactive terminal", selector)
-		}
-		fmt.Fprint(a.out, "Select a package number (empty to cancel): ")
-		value, err := strconv.Atoi(readChoice(input))
-		if err != nil || value < 1 || value > len(matches) {
-			return nil, errors.New("package selection canceled or invalid")
-		}
-		selected = value - 1
-	}
-	target := matches[selected]
+func (a *app) planCatalogInstall(input *bufio.Reader, interactive bool, entries []catalog.Entry, installed []packages.Package, selectors []string) ([]catalog.Entry, error) {
+	current := make(map[string]packages.Package, len(installed))
 	for _, p := range installed {
-		if p.ID == target.ID && p.Type == "library" && p.Version == target.Version {
-			fmt.Fprintf(a.out, "%s %s is already installed.\n", p.Name, p.Version)
-			return nil, nil
+		current[p.ID] = p
+	}
+	var targets []catalog.InstallTarget
+	seen := make(map[string]bool, len(selectors))
+	for _, selector := range selectors {
+		if seen[selector] {
+			continue
 		}
-	}
-	if pinned {
-		entries = slices.DeleteFunc(slices.Clone(entries), func(entry catalog.Entry) bool {
-			return entry.ID == target.ID && entry.Version != version
+		seen[selector] = true
+		name, version, pinned := strings.Cut(selector, "@")
+		if name == "" || pinned && packages.ValidateVersion(version) != nil {
+			return nil, fmt.Errorf("包标识 %q 无效。请使用 包名[@版本] 格式", selector)
+		}
+		matches := newestEntries(entries, func(entry catalog.Entry) bool {
+			return entry.Name == name && (!pinned || entry.Version == version)
 		})
+		target, err := a.chooseCatalogInstall(input, interactive, matches, selector)
+		if err != nil {
+			return nil, err
+		}
+		if p := current[target.ID]; p.Type == "library" && p.Version == target.Version {
+			fmt.Fprintf(a.out, "已安装 %s %s，无需重复安装。\n", p.Name, p.Version)
+			continue
+		}
+		targets = append(targets, catalog.InstallTarget{ID: target.ID, Source: target.Source, Version: version})
 	}
-	return catalog.ResolveInstall(entries, installed, []string{target.ID}, target.Source)
+	return catalog.ResolveInstall(entries, installed, targets)
+}
+
+func (a *app) chooseCatalogInstall(input *bufio.Reader, interactive bool, matches []catalog.Entry, selector string) (catalog.Entry, error) {
+	switch len(matches) {
+	case 0:
+		return catalog.Entry{}, fmt.Errorf("未找到扩展包 %q。请通过 bmc plugin search 搜索可用的包", selector)
+	case 1:
+		return matches[0], nil
+	}
+	for i, match := range matches {
+		fmt.Fprintf(a.out, "%d. %s@%s (%s, %s)\n", i+1, match.Name, match.Version, packages.CanonicalType(match.Type), match.Source)
+	}
+	if !interactive {
+		return catalog.Entry{}, fmt.Errorf("包名 %q 匹配多个包。请在交互终端中选择", selector)
+	}
+	fmt.Fprint(a.out, "请输入包编号，直接回车取消：")
+	value, err := strconv.Atoi(readChoice(input))
+	if err != nil || value < 1 || value > len(matches) {
+		return catalog.Entry{}, errors.New("包选择已取消或编号无效")
+	}
+	return matches[value-1], nil
 }
 
 func (a *app) planCatalogUpgrade(input *bufio.Reader, interactive bool, entries []catalog.Entry, installed []packages.Package, name string) ([]catalog.Entry, error) {
@@ -166,14 +182,14 @@ func (a *app) planCatalogUpgrade(input *bufio.Reader, interactive bool, entries 
 		for _, entry := range entries {
 			if entry.ID == p.ID && entry.LibrarySchemaVersion != p.Library.SchemaVersion &&
 				entry.LibraryMigrations[strconv.Itoa(p.Library.SchemaVersion)] == "" && catalog.CompareVersion(entry.Version, p.Version) > 0 {
-				fmt.Fprintf(a.out, "%s: release %s requires a different Library schema; incompatible versions are skipped.\n", p.Name, entry.Version)
+				fmt.Fprintf(a.out, "%s：发布版本 %s 的业务库结构不兼容，已跳过该版本。\n", p.Name, entry.Version)
 				break
 			}
 		}
 	}
 	plan, err := catalog.ResolveUpgrade(entries, installed, ids, "")
 	if err == nil && len(plan) == 0 {
-		fmt.Fprintln(a.out, "No upgrades available.")
+		fmt.Fprintln(a.out, "没有可用的升级。")
 	}
 	return plan, err
 }
@@ -183,12 +199,12 @@ func (a *app) printCatalogPlan(plan []catalog.Entry, installed []packages.Packag
 	for _, p := range installed {
 		versions[p.ID] = p.Version
 	}
-	fmt.Fprintln(a.out, "Package plan")
+	fmt.Fprintln(a.out, "扩展包变更计划")
 	for _, entry := range plan {
 		if current := versions[entry.ID]; current != "" {
-			fmt.Fprintf(a.out, "  Upgrade %s %s → %s (%s)\n", entry.Name, current, entry.Version, entry.Source)
+			fmt.Fprintf(a.out, "  升级 %s %s → %s（%s）\n", entry.Name, current, entry.Version, entry.Source)
 		} else {
-			fmt.Fprintf(a.out, "  Install %s %s (%s)\n", entry.Name, entry.Version, entry.Source)
+			fmt.Fprintf(a.out, "  安装 %s %s（%s）\n", entry.Name, entry.Version, entry.Source)
 		}
 	}
 }
@@ -204,7 +220,7 @@ func (a *app) applyCatalogPlan(repository *catalog.Store, plan []catalog.Entry, 
 	for _, entry := range plan {
 		file, err := repository.Download(context.Background(), entry, stage)
 		if err != nil {
-			return fmt.Errorf("%s %s from %s: %w", entry.Name, entry.Version, entry.Source, err)
+			return fmt.Errorf("无法从 %s 下载 %s %s：%w", entry.Source, entry.Name, entry.Version, err)
 		}
 		files = append(files, file)
 		origins[entry.ID] = entry.Source
@@ -220,6 +236,6 @@ func (a *app) applyCatalogPlan(repository *catalog.Store, plan []catalog.Entry, 
 	if err := a.commitCatalogPlan(prepared, input, interactive); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "Activated %d package changes.\n", len(prepared.ChangedPackages()))
+	fmt.Fprintf(a.out, "已应用 %d 项扩展包变更。\n", len(prepared.ChangedPackages()))
 	return nil
 }

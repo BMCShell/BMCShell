@@ -76,14 +76,17 @@ func (a *app) selectLibraryTable(p packages.Package, input *bufio.Reader) (libra
 }
 
 func (a *app) runLibraryMenuAction(p packages.Package, table librarydb.Table, input *bufio.Reader, choice string) error {
-	actions := map[string]string{"1": "read", "2": "add", "3": "update", "4": "delete"}
+	if choice == "1" {
+		return a.viewLibraryRecords(p, table, input)
+	}
+	actions := map[string]string{"2": "add", "3": "update", "4": "delete"}
 	action := actions[choice]
 	if action == "" {
 		return errors.New("无效的操作编号")
 	}
 	edit := librarydb.RecordEdit{Table: table.Name, Action: action}
 	if action != "add" {
-		key, proceed, err := a.readLibraryKey(table, input, action == "read")
+		key, proceed, err := a.readLibraryKey(table, input, "")
 		if err != nil {
 			return err
 		}
@@ -96,15 +99,12 @@ func (a *app) runLibraryMenuAction(p packages.Package, table librarydb.Table, in
 	if err != nil {
 		return err
 	}
-	if action != "read" {
-		state.fingerprint, err = libraryFingerprint(state)
-		if err != nil {
-			return err
-		}
+	state.fingerprint, err = libraryFingerprint(state)
+	if err != nil {
+		return err
 	}
 	if action != "add" {
-		const pageSize = 25
-		columns, rows, err := librarydb.ReadRecords(state.work, p.ID, *p.Library, table.Name, edit.Key, pageSize+1)
+		columns, rows, err := librarydb.ViewRecords(state.work, p.ID, *p.Library, table.Name, librarydb.RecordView{Key: edit.Key})
 		if err != nil {
 			return err
 		}
@@ -112,21 +112,9 @@ func (a *app) runLibraryMenuAction(p packages.Package, table librarydb.Table, in
 			fmt.Fprintln(a.out, "未找到记录。")
 			return nil
 		}
-		fmt.Fprintln(a.out, strings.Join(columns, "\t"))
-		for _, row := range rows[:min(pageSize, len(rows))] {
-			var values []string
-			for _, value := range row {
-				values = append(values, libraryDisplayValue(value))
-			}
-			fmt.Fprintln(a.out, strings.Join(values, "\t"))
-		}
-		if len(rows) > pageSize {
-			fmt.Fprintf(a.out, "已显示前 %d 条。输入键可定位其他记录。\n", pageSize)
-		}
+		a.displayLibraryRecords(columns, rows)
 	}
 	switch action {
-	case "read":
-		return nil
 	case "delete":
 		confirm, err := a.libraryLine(input, "确认删除此记录 [y/N] ")
 		if err != nil {
@@ -155,19 +143,17 @@ func (a *app) runLibraryMenuAction(p packages.Package, table librarydb.Table, in
 	return nil
 }
 
-func (a *app) readLibraryKey(table librarydb.Table, input *bufio.Reader, listing bool) ([]any, bool, error) {
+func (a *app) readLibraryKey(table librarydb.Table, input *bufio.Reader, firstAnswer string) ([]any, bool, error) {
 	keys := make([]any, 0, len(table.Keys))
 	for _, name := range table.Keys {
-		hint := "回车取消"
-		if len(keys) == 0 && listing {
-			hint = "回车列出记录"
-		}
-		answer, err := a.libraryLine(input, fmt.Sprintf("键 %s（%s） ", name, hint))
-		if err != nil {
-			return nil, false, err
-		}
+		answer := firstAnswer
+		firstAnswer = ""
 		if answer == "" {
-			return nil, listing && len(keys) == 0, nil
+			var err error
+			answer, err = a.libraryLine(input, fmt.Sprintf("键 %s（回车取消） ", libraryFieldPrompt(table, name)))
+			if err != nil || answer == "" {
+				return nil, false, err
+			}
 		}
 		value, err := parseLibraryValue(answer)
 		if err != nil {
@@ -185,7 +171,7 @@ func (a *app) readLibraryValues(table librarydb.Table, schema librarydb.TableSch
 		if column.Hidden != 0 || updating && slices.Contains(table.Keys, column.Name) {
 			continue
 		}
-		line, err := a.libraryLine(input, column.Name+" ")
+		line, err := a.libraryLine(input, libraryFieldPrompt(table, column.Name)+" ")
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +233,7 @@ func parseLibraryValue(input string) (any, error) {
 // mutateLibrary commits a record and its audit entry in the current work database.
 func (a *app) mutateLibrary(p packages.Package, edit librarydb.RecordEdit, source string, expected *libraryFiles) error {
 	if p.Library == nil || source != "manual" && source != "plugin" {
-		return errors.New("无效的 Library 写入来源")
+		return errors.New("业务库记录的写入来源无效")
 	}
 	unlock, err := a.lockLibrary(p.ID)
 	if err != nil {
@@ -256,7 +242,7 @@ func (a *app) mutateLibrary(p packages.Package, edit librarydb.RecordEdit, sourc
 	defer unlock()
 	current, err := a.store.Find(p.ID)
 	if err != nil || current.Version != p.Version || current.Library == nil {
-		return errors.New("Library 包已变更，请重新打开管理菜单")
+		return errors.New("业务库的包已变更，请重新打开管理菜单")
 	}
 	before, err := a.libraryFiles(current)
 	if err != nil {
@@ -264,7 +250,7 @@ func (a *app) mutateLibrary(p packages.Package, edit librarydb.RecordEdit, sourc
 	}
 	if expected != nil {
 		if before.registered != expected.registered {
-			return errors.New("确认期间 Library 已更新，请重新预览")
+			return errors.New("确认期间业务库已更新，请重新预览")
 		}
 		if err := checkLibraryGeneration(*expected); err != nil {
 			return err
@@ -283,7 +269,7 @@ func (a *app) mutateLibrary(p packages.Package, edit librarydb.RecordEdit, sourc
 		return err
 	}
 	if err := flushLibraryAudit(before); err != nil {
-		fmt.Fprintf(a.errOut, "Library 修改已保存，审计待同步：%v\n", err)
+		fmt.Fprintf(a.errOut, "业务库修改已保存，审计记录待同步：%v\n", err)
 	}
 	return nil
 }

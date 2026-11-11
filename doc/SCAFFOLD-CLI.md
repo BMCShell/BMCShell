@@ -59,5 +59,5 @@ PowerShell 示例，输出到 `D:\bmcshell-book-redfish\`。
 
 - 正式构建及打包入口校验清单字段、推导出的 `name` 和源码项目根目录名。编译型工具在编译前检查，数据型包在打包前检查。安装后的存储路径使用 UUID。
 - 发布归档为 `<name>@<version>.zip`，SHA256 清单为 `<name>@<version>.manifest.json`。有多个平台产物时用平台子目录区分，清单记录对应平台和文件路径。
-- `bmc plugin install`、`upgrade` 和 `remove` 使用完整 `name`。安装时可在包名后追加 `@<version>`。同名包由交互终端列出候选供用户选择。`bmc book` 和 `bmc library` 使用 `shortName`。用 `bmc plugin install --file` 安装本地目录或 ZIP。[软件源管理](SOFTWARE-SOURCES.md)
+- `bmc plugin install`、`upgrade` 和 `remove` 使用完整 `name`。安装时可传入多个包名，并在各包名后追加 `@<version>`。同名包由交互终端列出候选供用户选择。`bmc book` 和 `bmc library` 使用 `shortName`。用 `bmc plugin install --file` 安装一个或多个本地目录或 ZIP。[软件源管理](SOFTWARE-SOURCES.md)
 - 依赖、锁定、升级和回退以 UUID 为准。迁移旧包时保留 UUID，将原中文名称放入 `displayName`，旧 `summary` 可迁移到 `description`。

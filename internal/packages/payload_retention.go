@@ -97,7 +97,7 @@ func (s *Store) supersededPayloads() ([]registryEntry, bool, error) {
 			return nil, false, err
 		}
 		if !hasPayloadRetention(entry.Kind) || !packageID.MatchString(entry.ID) || ValidateVersion(entry.Version) != nil {
-			return nil, false, fmt.Errorf("invalid superseded package identity %s %s %s", entry.Kind, entry.ID, entry.Version)
+			return nil, false, fmt.Errorf("已被替换的包标识 %s %s %s 无效", entry.Kind, entry.ID, entry.Version)
 		}
 		history = append(history, entry)
 	}
@@ -201,7 +201,7 @@ func (s *Store) PlanPayloadRetention() ([]string, error) {
 			return nil, err
 		}
 		if resolved != p.Root && (runtime.GOOS != "windows" || !strings.EqualFold(resolved, p.Root)) {
-			return nil, fmt.Errorf("superseded package path uses a link: %s", p.Root)
+			return nil, fmt.Errorf("已被替换的包路径 %s 使用了链接", p.Root)
 		}
 		paths = append(paths, p.Root)
 	}

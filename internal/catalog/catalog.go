@@ -80,7 +80,7 @@ func (s *Store) Sources() ([]Source, error) {
 	}
 	var sources []Source
 	if err := json.Unmarshal(data, &sources); err != nil || sources == nil || len(sources) > maxSources {
-		return nil, errors.New("invalid software source configuration")
+		return nil, errors.New("软件源配置无效")
 	}
 	seen := make(map[string]bool, len(sources))
 	for _, source := range sources {
@@ -88,7 +88,7 @@ func (s *Store) Sources() ([]Source, error) {
 			return nil, err
 		}
 		if seen[source.Name] {
-			return nil, fmt.Errorf("duplicate software source %q", source.Name)
+			return nil, fmt.Errorf("软件源 %q 重复", source.Name)
 		}
 		seen[source.Name] = true
 	}
@@ -119,7 +119,7 @@ func (s *Store) SetSource(source Source) error {
 			sources[index] = source
 		} else {
 			if len(sources) >= maxSources {
-				return fmt.Errorf("at most %d software sources can be configured", maxSources)
+				return fmt.Errorf("最多可配置 %d 个软件源", maxSources)
 			}
 			sources = append(sources, source)
 		}
@@ -129,7 +129,7 @@ func (s *Store) SetSource(source Source) error {
 
 func (s *Store) RemoveSource(name string) error {
 	if !sourceName.MatchString(name) {
-		return fmt.Errorf("invalid software source name %q", name)
+		return fmt.Errorf("软件源名称 %q 无效", name)
 	}
 	return s.withLock(func() error {
 		sources, err := s.Sources()
@@ -138,7 +138,7 @@ func (s *Store) RemoveSource(name string) error {
 		}
 		index := slices.IndexFunc(sources, func(source Source) bool { return source.Name == name })
 		if index < 0 {
-			return fmt.Errorf("software source %q is not configured", name)
+			return fmt.Errorf("尚未配置软件源 %q", name)
 		}
 		if err := writeJSON(filepath.Join(s.root, "sources.json"), slices.Delete(sources, index, index+1)); err != nil {
 			return err
@@ -163,11 +163,11 @@ func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, erro
 	if name != "" {
 		sources = slices.DeleteFunc(sources, func(source Source) bool { return source.Name != name })
 		if len(sources) == 0 {
-			return nil, fmt.Errorf("software source %q is not configured", name)
+			return nil, fmt.Errorf("尚未配置软件源 %q", name)
 		}
 	}
 	if len(sources) == 0 {
-		return nil, errors.New("no software sources configured")
+		return nil, errors.New("尚未配置软件源")
 	}
 	var results []RefreshResult
 	var failures []error
@@ -175,7 +175,7 @@ func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, erro
 		count, err := s.refreshSource(ctx, source)
 		results = append(results, RefreshResult{Source: source.Name, Count: count, Err: err})
 		if err != nil {
-			failures = append(failures, fmt.Errorf("source %s: %w", source.Name, err))
+			failures = append(failures, fmt.Errorf("软件源 %s：%w", source.Name, err))
 		}
 	}
 	return results, errors.Join(failures...)
@@ -207,7 +207,7 @@ func (s *Store) refreshSource(ctx context.Context, source Source) (int, error) {
 			return err
 		}
 		if !slices.Contains(sources, source) {
-			return errors.New("source changed during index refresh")
+			return errors.New("刷新索引时软件源配置已变更")
 		}
 		return writeJSON(s.indexPath(source.Name), cachedIndex{URL: source.URL, Data: data, InsecureTLS: source.InsecureTLS})
 	}); err != nil {
@@ -224,23 +224,9 @@ func (s *Store) Entries() ([]Entry, error) {
 	platform := runtime.GOOS + "-" + runtime.GOARCH
 	var entries []Entry
 	for _, source := range sources {
-		data, err := readFile(s.indexPath(source.Name), maxIndexBytes*2)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		cached, err := s.CachedEntries(source)
 		if err != nil {
 			return nil, err
-		}
-		var index cachedIndex
-		if err := json.Unmarshal(data, &index); err != nil {
-			return nil, fmt.Errorf("invalid cached index for %s; refresh the source", source.Name)
-		}
-		if index.URL != source.URL || index.InsecureTLS != source.InsecureTLS {
-			continue
-		}
-		cached, err := parseIndex(source, index.Data)
-		if err != nil {
-			return nil, fmt.Errorf("source %s: %w", source.Name, err)
 		}
 		for _, entry := range cached {
 			if entry.CoreAPI == 1 && (len(entry.Platforms) == 0 || slices.Contains(entry.Platforms, "any") || slices.Contains(entry.Platforms, platform)) {
@@ -251,16 +237,43 @@ func (s *Store) Entries() ([]Entry, error) {
 	return entries, nil
 }
 
+// CachedEntries reads every entry in the cached index for a configured source.
+// A nil slice with no error means there is no cache matching the configuration.
+func (s *Store) CachedEntries(source Source) ([]Entry, error) {
+	if err := source.validate(); err != nil {
+		return nil, err
+	}
+	data, err := readFile(s.indexPath(source.Name), maxIndexBytes*2)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var index cachedIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, fmt.Errorf("软件源 %s 的缓存索引无效，请刷新软件源", source.Name)
+	}
+	if index.URL != source.URL || index.InsecureTLS != source.InsecureTLS {
+		return nil, nil
+	}
+	entries, err := parseIndex(source, index.Data)
+	if err != nil {
+		return nil, fmt.Errorf("软件源 %s：%w", source.Name, err)
+	}
+	return entries, nil
+}
+
 func (source Source) validate() error {
 	if !sourceName.MatchString(source.Name) || source.Official != (source.Name == "official") {
-		return fmt.Errorf("invalid software source name %q; official is reserved for the official source", source.Name)
+		return fmt.Errorf("软件源名称 %q 无效。official 保留给官方源", source.Name)
 	}
 	u, err := networkURL(source.URL)
 	if err != nil {
-		return fmt.Errorf("source %s: %w", source.Name, err)
+		return fmt.Errorf("软件源 %s：%w", source.Name, err)
 	}
 	if source.InsecureTLS && !privateTLSOrigin(u).IsValid() {
-		return fmt.Errorf("source %s: --insecure requires an HTTPS URL with a private IP literal", source.Name)
+		return fmt.Errorf("软件源 %s 使用 --insecure 时，HTTPS 地址必须直接包含私有 IP", source.Name)
 	}
 	return nil
 }
@@ -275,7 +288,7 @@ func (s *Store) withLock(action func() error) error {
 	}
 	unlock, err := filelock.Acquire(filepath.Join(s.root, ".sources.lock"))
 	if err != nil {
-		return fmt.Errorf("lock software source configuration: %w", err)
+		return fmt.Errorf("无法锁定软件源配置：%w", err)
 	}
 	defer unlock()
 	return action()
@@ -296,7 +309,7 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, errors.New("software source data exceeds the size limit")
+		return nil, errors.New("软件源数据超过大小限制")
 	}
 	return data, nil
 }

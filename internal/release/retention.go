@@ -152,7 +152,7 @@ func readActive(bin string) (string, int64, error) {
 	}
 	version, terminated := strings.CutSuffix(string(data), "\n")
 	if !terminated || !validVersion(version) {
-		return "", 0, errors.New("invalid BMCShell active version")
+		return "", 0, errors.New("BMCShell 当前版本无效")
 	}
 	return version, info.ModTime().UnixNano(), nil
 }
@@ -163,7 +163,7 @@ func readRegular(path string, limit int64) ([]byte, fs.FileInfo, error) {
 		return nil, nil, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > limit {
-		return nil, nil, fmt.Errorf("invalid core release metadata file %q", path)
+		return nil, nil, fmt.Errorf("框架发布元数据文件 %q 无效", path)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -172,14 +172,14 @@ func readRegular(path string, limit int64) ([]byte, fs.FileInfo, error) {
 	defer file.Close()
 	openInfo, err := file.Stat()
 	if err != nil || !os.SameFile(info, openInfo) {
-		return nil, nil, fmt.Errorf("core release metadata file changed %q", path)
+		return nil, nil, fmt.Errorf("框架发布元数据文件 %q 已变更", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, nil, err
 	}
 	if int64(len(data)) != info.Size() {
-		return nil, nil, fmt.Errorf("core release metadata file changed %q", path)
+		return nil, nil, fmt.Errorf("框架发布元数据文件 %q 已变更", path)
 	}
 	return data, info, nil
 }
@@ -190,21 +190,21 @@ func directDirectory(path string) error {
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("unsafe core release directory %q", path)
+		return fmt.Errorf("框架发布目录 %q 不符合路径要求", path)
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return err
 	}
 	if resolved != path && !(runtime.GOOS == "windows" && strings.EqualFold(resolved, path)) {
-		return fmt.Errorf("unsafe redirected core release directory %q", path)
+		return fmt.Errorf("框架发布目录 %q 重定向到了不受支持的位置", path)
 	}
 	return nil
 }
 
 func corePayload(bin, version string) (string, error) {
 	if !validVersion(version) {
-		return "", fmt.Errorf("invalid core release version %q", version)
+		return "", fmt.Errorf("框架发布版本 %q 无效", version)
 	}
 	payload := filepath.Join(bin, releasesDir, version)
 	if err := directDirectory(payload); err != nil {
@@ -215,7 +215,7 @@ func corePayload(bin, version string) (string, error) {
 		return "", err
 	}
 	if !regularFile(bridge) || !regularFile(filepath.Join(payload, executableName)) {
-		return "", fmt.Errorf("incomplete core release %q", version)
+		return "", fmt.Errorf("框架发布版 %q 文件不完整", version)
 	}
 	return payload, nil
 }
@@ -233,7 +233,7 @@ func saveHistory(bin string, history releaseHistory) error {
 	path := filepath.Join(bin, historyName)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("invalid core release history file %q", path)
+			return fmt.Errorf("框架发布历史文件 %q 无效", path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err

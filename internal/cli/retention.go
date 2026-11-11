@@ -20,7 +20,7 @@ type historyPlan struct {
 // history serves the packaged offline maintenance script.
 func (a *app) history(args []string) error {
 	if len(args) != 1 || os.Getenv("BMCSHELL_BRIDGE_MAINTENANCE") != "1" {
-		return errors.New("history maintenance requires the offline maintenance script")
+		return errors.New("请通过离线维护脚本清理历史版本")
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -28,7 +28,7 @@ func (a *app) history(args []string) error {
 	}
 	root, portable := release.PortableRoot(executable)
 	if !portable {
-		return errors.New("history maintenance requires a portable installation")
+		return errors.New("历史版本维护需要便携版安装")
 	}
 
 	switch args[0] {
@@ -37,7 +37,7 @@ func (a *app) history(args []string) error {
 	case "retire":
 		var expected []string
 		if err := json.NewDecoder(io.LimitReader(a.in, 4<<20)).Decode(&expected); err != nil {
-			return fmt.Errorf("read verified Library cleanup plan: %w", err)
+			return fmt.Errorf("无法读取已验证的业务库清理计划：%w", err)
 		}
 		return a.store.RetireLibraryHistory(expected)
 	case "preview", "plan":
@@ -60,7 +60,7 @@ func (a *app) history(args []string) error {
 		}
 		return json.NewEncoder(a.out).Encode(plan)
 	default:
-		return errors.New("unknown offline maintenance action")
+		return errors.New("未知的离线维护操作")
 	}
 }
 
@@ -70,7 +70,7 @@ func (a *app) verifyHistoryBackup() error {
 		return err
 	}
 	if len(damaged) != 0 {
-		return fmt.Errorf("cannot verify backup with damaged package %s", damaged[0].Package.ID)
+		return fmt.Errorf("扩展包 %s 已损坏，无法验证备份", damaged[0].Package.ID)
 	}
 	for _, p := range installed {
 		if p.Library == nil {
@@ -81,10 +81,10 @@ func (a *app) verifyHistoryBackup() error {
 			return err
 		}
 		if _, err := librarydb.ValidateWorking(state.work, p.ID, *p.Library); err != nil {
-			return fmt.Errorf("verify Library %s working database: %w", p.Name, err)
+			return fmt.Errorf("无法验证业务库 %s 的工作库：%w", p.Name, err)
 		}
 		if _, err := librarydb.Validate(state.baseline, p.ID, *p.Library); err != nil {
-			return fmt.Errorf("verify Library %s baseline: %w", p.Name, err)
+			return fmt.Errorf("无法验证业务库 %s 的基线：%w", p.Name, err)
 		}
 	}
 	return nil

@@ -29,7 +29,7 @@ func ExampleContract() Contract {
 // CreateExample writes an unused .library.db with one fictional example record.
 func CreateExample(path, id string) (err error) {
 	if !strings.HasSuffix(strings.ToLower(path), ".library.db") || !libraryID.MatchString(id) {
-		return fmt.Errorf("Library template needs a .library.db path and a valid package UUID")
+		return fmt.Errorf("业务库模板需要 .library.db 路径和有效的包 UUID")
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {

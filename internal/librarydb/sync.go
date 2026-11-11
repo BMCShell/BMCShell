@@ -123,7 +123,7 @@ func Compare(localPath, baselinePath, remotePath string, snapshot Snapshot, cont
 		for _, key := range table.Keys {
 			index := slices.Index(layout.columns, key)
 			if index < 0 {
-				return plan, fmt.Errorf("invalid merge key %s.%s", table.Name, key)
+				return plan, fmt.Errorf("合并键 %s.%s 无效", table.Name, key)
 			}
 			layout.keyIndexes = append(layout.keyIndexes, index)
 		}
@@ -154,7 +154,7 @@ func readRows(db *sql.DB, table string, layout tableLayout) (map[string][]any, e
 	result := make(map[string][]any)
 	for rows.Next() {
 		if len(result) >= 250000 || (len(result)+1)*len(layout.columns) > 2000000 {
-			return nil, fmt.Errorf("table %q exceeds the sync row or cell limit", table)
+			return nil, fmt.Errorf("表 %q 超过同步的行数或单元格数限制", table)
 		}
 		record, destinations := make([]any, len(layout.columns)), make([]any, len(layout.columns))
 		for i := range record {
@@ -165,7 +165,7 @@ func readRows(db *sql.DB, table string, layout tableLayout) (map[string][]any, e
 		}
 		key := mergeKey(record, layout)
 		if _, found := result[key]; found {
-			return nil, fmt.Errorf("table %s has a duplicate merge key", table)
+			return nil, fmt.Errorf("表 %s 中有重复的合并键", table)
 		}
 		result[key] = record
 	}
@@ -283,7 +283,7 @@ func (p Plan) Apply(path string, dataVersion string) error {
 	if err := conn.Raw(func(value any) error {
 		connection, ok := value.(driver.Conn)
 		if !ok {
-			return errors.New("Library sync requires the SQLite driver")
+			return errors.New("同步业务库需要 SQLite 驱动")
 		}
 		raw := connection.Raw()
 		if _, err := raw.Config(sqlite3.DBCONFIG_ENABLE_TRIGGER, false); err != nil {
@@ -336,7 +336,7 @@ func deleteLocalRow(tx *sql.Tx, change Change, layout tableLayout) error {
 	}
 	_, err := tx.Exec("DELETE FROM "+QuoteIdentifier(change.Table)+" WHERE "+strings.Join(filter, " AND "), change.Key...)
 	if err != nil {
-		return fmt.Errorf("delete from table %q: %w", change.Table, err)
+		return fmt.Errorf("从表 %q 删除记录失败：%w", change.Table, err)
 	}
 	return nil
 }
@@ -345,7 +345,7 @@ func insertRemoteRow(tx *sql.Tx, change Change, layout tableLayout) error {
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(layout.columns)), ",")
 	_, err := tx.Exec("INSERT INTO "+QuoteIdentifier(change.Table)+" ("+quotedList(layout.columns)+") VALUES ("+placeholders+")", change.Remote...)
 	if err != nil {
-		return fmt.Errorf("insert into table %q: %w", change.Table, err)
+		return fmt.Errorf("向表 %q 插入记录失败：%w", change.Table, err)
 	}
 	return nil
 }

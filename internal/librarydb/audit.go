@@ -20,7 +20,7 @@ func validAuditAppend(offset int64, line []byte) bool {
 
 func queueAudit(tx *sql.Tx, offset int64, line []byte) error {
 	if !validAuditAppend(offset, line) {
-		return errors.New("invalid pending Library audit entry")
+		return errors.New("待提交的业务库审计记录无效")
 	}
 	if _, err := tx.Exec(`
 		CREATE TABLE IF NOT EXISTS _bmcshell_library_pending_audit (
@@ -57,7 +57,7 @@ func PendingAudit(path string) (*AuditAppend, error) {
 		return nil, err
 	}
 	if !validAuditAppend(pending.Offset, pending.Line) {
-		return nil, errors.New("invalid pending Library audit entry")
+		return nil, errors.New("待提交的业务库审计记录无效")
 	}
 	return &pending, nil
 }
@@ -82,7 +82,7 @@ func AcknowledgeAudit(path string, pending AuditAppend) error {
 		return err
 	}
 	if count != 1 {
-		return errors.New("pending Library audit entry changed")
+		return errors.New("待提交的业务库审计记录已变更")
 	}
 	// Leave the normal working schema compatible with earlier portable cores.
 	if _, err := tx.Exec("DROP TABLE _bmcshell_library_pending_audit"); err != nil {

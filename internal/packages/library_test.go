@@ -30,9 +30,9 @@ func TestInstallSQLiteLibrary(t *testing.T) {
 		wantErr  string
 	}{
 		{"valid", id, dataPath, &contract, ""},
-		{"missing contract", id, dataPath, nil, "declare its library contract"},
-		{"wrong extension", id, "library/records.db", &contract, "must end in .library.db"},
-		{"wrong UUID", bookID, dataPath, &contract, "invalid Library data"},
+		{"missing contract", id, dataPath, nil, "须在清单中声明库结构"},
+		{"wrong extension", id, "library/records.db", &contract, "须以 .library.db 结尾"},
+		{"wrong UUID", bookID, dataPath, &contract, "业务库数据无效"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := Open(t.TempDir())

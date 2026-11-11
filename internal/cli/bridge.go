@@ -48,16 +48,16 @@ func (a *app) findTool(name string) (toolRef, error) {
 			return t, nil
 		}
 	}
-	return toolRef{}, fmt.Errorf("unknown tool %q", name)
+	return toolRef{}, fmt.Errorf("未找到工具 %q。运行 bmc tool --all 查看所有工具", name)
 }
 
 func toolReady(t toolRef, ctx session.Context) error {
 	if t.Spec.Scope == "session" && ctx == nil {
-		return errors.New("select a BMC with bmc use first")
+		return errors.New("尚未选中 BMC 目标。请先运行 bmc use <IP>")
 	}
 	for _, field := range t.Spec.Requires {
 		if ctx[field] == "" {
-			return fmt.Errorf("session field %q is required", field)
+			return fmt.Errorf("缺少会话字段 %q", field)
 		}
 	}
 	return nil
@@ -69,14 +69,14 @@ func toolAvailability(p packages.Package, name string) error {
 			continue
 		}
 		if _, err := exec.LookPath(dep.ID); err != nil {
-			return fmt.Errorf("missing dependency %s", dep.ID)
+			return fmt.Errorf("缺少依赖 %s", dep.ID)
 		}
 	}
 	return nil
 }
 
 func (a *app) tool(args []string) error {
-	const usage = "usage: bmc tool [-l|--list|-a|--all] or bmc tool <name> [-h|--help]"
+	const usage = "工具查询参数无效。运行 bmc tool --help 查看用法"
 	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
 		if resolver, ok := strings.CutPrefix(args[0], "use@"); ok {
 			return a.help([]string{"use", resolver})
@@ -107,6 +107,14 @@ func (a *app) tool(args []string) error {
 	if err != nil {
 		return err
 	}
+	var selectedResolver session.Resolver
+	if selector, ok := strings.CutPrefix(selected, "use@"); ok && selector != "" && selector != "generic" {
+		selectedResolver, err = session.SelectResolver(list, selector, nil)
+		if err != nil {
+			return err
+		}
+		selected = "use@" + selectedResolver.Selector()
+	}
 	registry, err := a.store.Environment(list)
 	if err != nil {
 		return err
@@ -133,7 +141,11 @@ func (a *app) tool(args []string) error {
 			groups[p.Name] = append(groups[p.Name], entry{name, spec.Scope, err})
 		}
 		for _, name := range sortedKeys(p.Provides.Resolvers) {
-			groups[p.Name] = append(groups[p.Name], entry{"use@" + name, "resolver", toolAvailability(p, name)})
+			if selectedResolver.Name != "" && (p.ID != selectedResolver.Package.ID || name != selectedResolver.Name) {
+				continue
+			}
+			resolver := session.Resolver{Name: name, Package: p}
+			groups[p.Name] = append(groups[p.Name], entry{"use@" + resolver.Selector(), "resolver", toolAvailability(p, name)})
 		}
 	}
 	for _, group := range sortedKeys(groups) {
@@ -146,25 +158,38 @@ func (a *app) tool(args []string) error {
 				fmt.Fprintln(a.out, group)
 				shown = true
 			}
-			status := "ready"
+			status := "可用"
 			if item.err != nil {
 				status = item.err.Error()
 			}
-			fmt.Fprintf(a.out, "  %s\t%s\t%s\n", item.name, item.scope, status)
+			fmt.Fprintf(a.out, "  %s\t%s\t%s\n", item.name, toolScopeLabel(item.scope), status)
 			if selected != "" {
 				return nil
 			}
 		}
 	}
 	if selected != "" {
-		return fmt.Errorf("unknown tool %q; see bmc tool --help", selected)
+		return fmt.Errorf("未找到工具 %q。运行 bmc tool --all 查看所有工具，或用 bmc tool --help 查看用法", selected)
 	}
 	return nil
 }
 
+func toolScopeLabel(scope string) string {
+	switch scope {
+	case "global":
+		return "全局工具"
+	case "session":
+		return "会话工具"
+	case "resolver":
+		return "解析器"
+	default:
+		return scope
+	}
+}
+
 func (a *app) completion(args []string) error {
 	if len(args) != 1 {
-		return errors.New("missing completion category")
+		return errors.New("未指定命令补全类别")
 	}
 	list, err := a.store.List()
 	if err != nil {
@@ -178,7 +203,8 @@ func (a *app) completion(args []string) error {
 				values[name] = true
 			}
 			for name := range p.Provides.Resolvers {
-				values["use@"+name] = true
+				resolver := session.Resolver{Name: name, Package: p}
+				values["use@"+resolver.Selector()] = true
 			}
 		case "books":
 			if p.Type == "book" {
@@ -186,7 +212,8 @@ func (a *app) completion(args []string) error {
 			}
 		case "resolvers":
 			for name := range p.Provides.Resolvers {
-				values[name] = true
+				resolver := session.Resolver{Name: name, Package: p}
+				values[resolver.Selector()] = true
 			}
 		}
 	}
@@ -201,7 +228,7 @@ func (a *app) completion(args []string) error {
 
 func (a *app) bridge(args []string) error {
 	if len(args) == 0 {
-		return errors.New("missing shell bridge action")
+		return errors.New("未指定 Bash 适配操作")
 	}
 	switch args[0] {
 	case "history":
@@ -218,7 +245,7 @@ func (a *app) bridge(args []string) error {
 		return a.resolve(args[1:])
 	case "tools":
 		if len(args) != 2 || args[1] != "session" && args[1] != "global" {
-			return errors.New("bridge tools expects global or session")
+			return errors.New("bridge tools 只接受 global 或 session")
 		}
 		list, err := a.tools()
 		if err != nil {
@@ -232,12 +259,12 @@ func (a *app) bridge(args []string) error {
 		return nil
 	case "run":
 		if len(args) < 2 {
-			return errors.New("bridge run needs a tool name")
+			return errors.New("bridge run 需要指定工具名")
 		}
 		return a.runTool(args[1], args[2:])
 	case "shell-entry":
 		if len(args) != 2 {
-			return errors.New("bridge shell-entry needs a tool name")
+			return errors.New("bridge shell-entry 需要指定工具名")
 		}
 		t, err := a.readyTool(args[1])
 		if err != nil || t.Spec.Runtime != "bash" || t.Spec.ManagedEnv() {
@@ -258,12 +285,12 @@ func (a *app) bridge(args []string) error {
 		return err
 	case "field":
 		if len(args) != 2 {
-			return errors.New("bridge field needs a context field name")
+			return errors.New("bridge field 需要指定会话字段名")
 		}
 		switch args[1] {
 		case "target.ip", "target.model", "target.resolver", "oem.sbmc.cid", "snmp.enterprises":
 		default:
-			return fmt.Errorf("unsupported public context field %q", args[1])
+			return fmt.Errorf("不能通过此命令读取会话字段 %q", args[1])
 		}
 		ctx, err := session.Current()
 		if err != nil {
@@ -273,29 +300,29 @@ func (a *app) bridge(args []string) error {
 		return err
 	case "prompt":
 		if len(args) != 1 {
-			return errors.New("bridge prompt takes no arguments")
+			return errors.New("bridge prompt 不接受参数")
 		}
 		return a.prompt()
 	default:
-		return fmt.Errorf("unknown shell bridge action %q", args[0])
+		return fmt.Errorf("未知的 Bash 适配操作 %q", args[0])
 	}
 }
 
 func (a *app) resolve(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: bmc use <IP> [--resolver <name>] [-- <resolver args...>]")
+		return errors.New("请指定目标 IP。运行 bmc use --help 查看用法")
 	}
 	ip, extra := args[0], args[1:]
 	var name string
 	if len(extra) != 0 && extra[0] == "--resolver" {
 		if len(extra) < 2 || extra[1] == "" || strings.HasPrefix(extra[1], "-") {
-			return errors.New("--resolver needs a name")
+			return errors.New("--resolver 需要指定解析器包名、导出名或 generic。运行 bmc use --help 查看用法")
 		}
 		name, extra = extra[1], extra[2:]
 	}
 	if len(extra) != 0 {
 		if extra[0] != "--" {
-			return errors.New("resolver arguments must follow --")
+			return errors.New("解析器参数必须放在 -- 后。运行 bmc use --help 查看用法")
 		}
 		extra = extra[1:]
 	}
@@ -326,13 +353,17 @@ func (a *app) resolve(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := session.Resolve(resolver, ip, extra, address, toolEnvironment(registry, true), a.in, a.errOut)
+	environment, err := a.resolverEnvironment(resolver.Package, list, registry)
+	if err != nil {
+		return err
+	}
+	result, err := session.Resolve(resolver, ip, extra, address, environment, a.in, a.errOut)
 	if err != nil {
 		return err
 	}
 	for name, field := range registry {
 		if value, ok := result.Context[field.Key]; ok && (field.Sensitive || field.Validate(value) != nil) {
-			return fmt.Errorf("resolver returned an invalid or sensitive value for %s", name)
+			return fmt.Errorf("解析器为 %s 返回了无效值或敏感值", name)
 		}
 	}
 	if err := json.NewEncoder(a.out).Encode(result.Context); err != nil {
@@ -363,7 +394,7 @@ func (a *app) runTool(name string, args []string) error {
 		return err
 	}
 	if t.Spec.Runtime == "bash" && !t.Spec.ManagedEnv() {
-		return errors.New("load shell/bmcshell.sh in Bash to run this tool")
+		return errors.New("请先在当前 Bash 中加载 bmcshell.sh，再运行此工具")
 	}
 	path, err := t.Package.File(t.Spec.Entry)
 	if err != nil {
@@ -373,7 +404,7 @@ func (a *app) runTool(name string, args []string) error {
 	if t.Spec.Runtime == "bash" {
 		executable = os.Getenv("BMCSHELL_BRIDGE_BASH")
 		if !filepath.IsAbs(executable) {
-			return errors.New("load shell/bmcshell.sh in Bash to run this tool")
+			return errors.New("请先在当前 Bash 中加载 bmcshell.sh，再运行此工具")
 		}
 		args = append([]string{"--", filepath.ToSlash(path)}, args...)
 	}
@@ -411,7 +442,7 @@ func (a *app) runTool(name string, args []string) error {
 	destination := os.Getenv("BMCSHELL_BRIDGE_RESULT_FILE")
 	if len(t.Spec.EnvWrites) != 0 {
 		if ctx == nil || !filepath.IsAbs(destination) {
-			return errors.New("environment writes need an active Bash session")
+			return errors.New("写入环境变量需要已启用的 Bash 会话")
 		}
 		result, err := os.CreateTemp("", "bmcshell-tool-*.json")
 		if err != nil {
@@ -448,14 +479,14 @@ func (a *app) prompt() error {
 		return err
 	}
 	if p.Type != "theme" {
-		return errors.New("active theme does not reference a theme package")
+		return errors.New("当前主题设置引用的包不是主题包")
 	}
 	var theme struct{ Prefix string }
 	if err := readPackageJSON(p, p.Data, &theme); err != nil {
 		return err
 	}
 	if len(theme.Prefix) > 120 || !session.Printable(theme.Prefix) || strings.ContainsAny(theme.Prefix, "$`\\") {
-		return errors.New("invalid theme prompt prefix")
+		return errors.New("主题设置的提示符前缀无效")
 	}
 	fmt.Fprint(a.out, strings.ReplaceAll(theme.Prefix, "{ip}", ctx["target.ip"]))
 	return nil

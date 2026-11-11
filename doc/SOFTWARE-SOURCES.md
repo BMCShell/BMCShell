@@ -10,13 +10,28 @@
 bmc setting --set plugin.source.official https://packages.example.org/bmcshell/index.json
 bmc setting --set plugin.source.internal https://packages.example.com/bmcshell/index.json
 bmc plugin update
-bmc plugin search cid
-bmc plugin install sbmc-library-cid@2.0.0
-bmc plugin upgrade sbmc-library-cid
+bmc plugin list
+bmc plugin list --installed
+bmc plugin list --installed --detial
+bmc plugin search redfish
+bmc plugin install bmcshell-tool-ipmi bmcshell-tool-redfish@1.0.1
+bmc plugin upgrade bmcshell-tool-redfish
 bmc setting --reset plugin.source.internal
 ```
 
-安装和升级使用完整包名，安装可指定版本。搜索按内部 UUID 合并同一包的结果。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。也可以用 `bmc plugin install --file <目录或 ZIP>` 安装本地包。
+`bmc plugin list` 读取当前配置的软件源索引缓存，列出各源的全部包版本，包括其他平台或 Core API 的包。已安装版本显示 `[已安装]`，清单也包括仅存在于本地的已安装包。用 `bmc plugin update` 获取或刷新索引。
+
+`bmc plugin list --installed` 或 `bmc plugin list -i` 只查看已安装的包。两种清单均可按包类型筛选，例如 `bmc plugin list tool` 或 `bmc plugin list --installed tool`。`bmc plugin search` 按关键词查询，每个 UUID 显示一个最新的兼容版本。
+
+加 `-d` 或 `--detial` 显示包描述，可与已安装筛选和类型筛选组合。旧索引可能没有描述字段，此时已安装版本可读取本地包清单。缺少描述的条目显示 `-`。源维护者可重新生成索引，客户端随后刷新缓存以获取描述。
+
+安装和升级使用完整包名。一次安装可传入多个包名，每个包都可用 `@version` 指定版本。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。
+
+本地安装使用一个 `--file`，后接一个或多个目录或 ZIP 路径。软件源安装和本地安装分别执行。一批包共同校验，校验通过后统一启用。
+
+```bash
+bmc plugin install --file './packages/book.zip' './packages/internal tool'
+```
 
 默认校验 HTTPS 证书。使用 RFC 1918 私有 IPv4 或 IPv6 ULA 地址配置内网源时，可以显式添加 `--insecure`。它只影响该源配置地址的同一 HTTPS IP 和端口，跨源下载和重定向继续校验证书。ZIP 的 SHA256 和包内清单仍会核对。
 
@@ -48,7 +63,7 @@ Library 数据随发布包安装或升级，并按工作库、旧版基准和新
 pwsh -File ./scripts/build-source-index.ps1 -ArtifactsFile ./artifacts.json -Output ./index.json -Merge
 ```
 
-脚本从 ZIP 读取包清单并计算 SHA256，同时写入依赖、Library 兼容范围和迁移信息。`-Merge` 保留现有索引条目。同一 UUID、版本和平台的 ZIP 内容变化时，需发布新版本。审核索引差异并确认下载链接可用后，再发布新索引。这个流程可以放进 CI。
+脚本从 ZIP 读取包清单并计算 SHA256，同时写入描述、依赖、Library 兼容范围和迁移信息。`-Merge` 保留现有索引条目。同一 UUID、版本和平台的 ZIP 内容变化时，需发布新版本。审核索引差异并确认下载链接可用后，再发布新索引。这个流程可以放进 CI。
 
 ## 其他部署方式
 

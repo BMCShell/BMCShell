@@ -11,30 +11,10 @@ import (
 	"bmcshell/internal/packages"
 )
 
-// Match finds the newest matching build of each distinct package ID.
-func Match(entries []Entry, selector, source string) ([]Entry, error) {
-	ids := make(map[string]bool)
-	for _, entry := range entries {
-		if source != "" && entry.Source != source {
-			continue
-		}
-		if strings.EqualFold(entry.ID, selector) {
-			ids = map[string]bool{entry.ID: true}
-			break
-		}
-		if entry.Name == selector {
-			ids[entry.ID] = true
-		}
-	}
-	var matches []Entry
-	for _, id := range orderedKeys(ids) {
-		versions, err := versionsFor(entries, id, source)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, versions[0])
-	}
-	return matches, nil
+type InstallTarget struct {
+	ID      string
+	Source  string
+	Version string
 }
 
 func versionsFor(entries []Entry, id, source string) ([]Entry, error) {
@@ -47,7 +27,7 @@ func versionsFor(entries []Entry, id, source string) ([]Entry, error) {
 	if source == "" && len(versions) != 0 {
 		for _, entry := range versions[1:] {
 			if entry.Source != versions[0].Source {
-				return nil, fmt.Errorf("package %s is available from %s and %s; review configured sources in bmc setting", id, versions[0].Source, entry.Source)
+				return nil, fmt.Errorf("包 %s 同时由 %s 和 %s 提供，请用 bmc setting 检查软件源设置", id, versions[0].Source, entry.Source)
 			}
 		}
 	}
@@ -57,24 +37,33 @@ func versionsFor(entries []Entry, id, source string) ([]Entry, error) {
 	return versions, nil
 }
 
-func ResolveInstall(entries []Entry, installed []packages.Package, selectors []string, source string) ([]Entry, error) {
-	s := newSolver(entries, installed, source, false)
-	for _, selector := range selectors {
-		matches, err := Match(entries, selector, source)
-		if err != nil {
-			return nil, err
+// ResolveInstall selects a compatible set of releases for the requested targets.
+// An empty target version permits the solver to choose any version at that source.
+func ResolveInstall(entries []Entry, installed []packages.Package, targets []InstallTarget) ([]Entry, error) {
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	s := newSolver(entries, installed, targets[0].Source, false)
+	s.installTargets = make(map[string]InstallTarget, len(targets))
+	for _, target := range targets {
+		if _, ok := s.current[target.ID]; ok {
+			return nil, fmt.Errorf("包 %s 已安装，请使用 bmc plugin upgrade 升级", target.ID)
 		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("package %q was not found in the cached indexes; run bmc plugin update", selector)
+		if previous, ok := s.installTargets[target.ID]; ok {
+			if previous.Source != target.Source ||
+				previous.Version != "" && target.Version != "" && previous.Version != target.Version {
+				return nil, fmt.Errorf("包 %s 的安装请求冲突", target.ID)
+			}
+			if target.Version == "" {
+				target.Version = previous.Version
+			}
 		}
-		if len(matches) != 1 {
-			return nil, fmt.Errorf("ambiguous package name %q; select a UUID", selector)
+		if s.source != target.Source {
+			// Dependencies can inherit a preferred source only when the targets share one.
+			s.source = ""
 		}
-		id := matches[0].ID
-		if _, ok := s.current[id]; ok {
-			return nil, fmt.Errorf("package %s is already installed; use bmc plugin upgrade", selector)
-		}
-		s.targets[id] = true
+		s.targets[target.ID] = true
+		s.installTargets[target.ID] = target
 	}
 	return s.solve()
 }
@@ -117,17 +106,17 @@ func ResolveUpgrade(entries []Entry, installed []packages.Package, selectors []s
 			}
 		}
 		if len(ids) == 0 {
-			return nil, fmt.Errorf("package %q is not installed", selector)
+			return nil, fmt.Errorf("包 %q 尚未安装", selector)
 		}
 		if len(ids) != 1 {
-			return nil, fmt.Errorf("ambiguous installed package %q; select a UUID", selector)
+			return nil, fmt.Errorf("有多个已安装的包匹配 %q，请指定 UUID", selector)
 		}
 		versions, err := upgradeVersions(entries, s.current[ids[0]], source, 0)
 		if err != nil {
 			return nil, err
 		}
 		if len(versions) == 0 {
-			return nil, fmt.Errorf("no newer compatible version for %q", selector)
+			return nil, fmt.Errorf("没有可用于升级 %q 的兼容版本", selector)
 		}
 		s.targets[ids[0]] = true
 	}
@@ -141,7 +130,7 @@ func ResolveLibrary(entries []Entry, installed []packages.Package, libraryID str
 	s := newSolver(entries, installed, source, true)
 	library, ok := s.current[libraryID]
 	if !ok || library.Library == nil || schemaVersion <= library.Library.SchemaVersion {
-		return nil, errors.New("Library source resolution requires an installed SQLite Library and a newer schema")
+		return nil, errors.New("查找业务库来源需要已安装的 SQLite 业务库和更新的结构版本")
 	}
 	s.libraryID, s.librarySchema = libraryID, schemaVersion
 	s.targets[libraryID] = true
@@ -169,18 +158,19 @@ type selection struct {
 }
 
 type solver struct {
-	entries       []Entry
-	current       map[string]packages.Package
-	targets       map[string]bool
-	affected      map[string]bool
-	domains       map[string][]selection
-	domainErrors  map[string]error
-	source        string
-	upgrade       bool
-	libraryID     string
-	librarySchema int
-	steps         int
-	conflict      error
+	entries        []Entry
+	current        map[string]packages.Package
+	targets        map[string]bool
+	installTargets map[string]InstallTarget
+	affected       map[string]bool
+	domains        map[string][]selection
+	domainErrors   map[string]error
+	source         string
+	upgrade        bool
+	libraryID      string
+	librarySchema  int
+	steps          int
+	conflict       error
 }
 
 func newSolver(entries []Entry, installed []packages.Package, source string, upgrade bool) *solver {
@@ -233,6 +223,10 @@ func (s *solver) domain(id string) []selection {
 	if s.targets[id] {
 		source = s.source
 	}
+	install, requested := s.installTargets[id]
+	if requested {
+		source = install.Source
+	}
 	switch {
 	case !installed && s.libraryID == "":
 		versions, err = versionsFor(s.entries, id, source)
@@ -257,6 +251,9 @@ func (s *solver) domain(id string) []selection {
 		s.domainErrors[id] = err
 	}
 	for _, entry := range versions {
+		if install.Version != "" && entry.Version != install.Version {
+			continue
+		}
 		m := entryManifest(entry)
 		if s.libraryAllows(current.Manifest, m) {
 			choices = append(choices, selection{manifest: m, entry: &entry})
@@ -306,9 +303,9 @@ func (s *solver) solve() ([]Entry, error) {
 	selected := make(map[string]selection)
 	if !s.search(required, selected) {
 		if s.steps >= 50000 {
-			return nil, errors.New("dependency search limit reached; narrow the requested packages or sources")
+			return nil, errors.New("依赖解析达到搜索上限，请缩小包或软件源的范围")
 		}
-		return nil, fmt.Errorf("no compatible package combination: %w", s.conflict)
+		return nil, fmt.Errorf("找不到兼容的包组合：%w", s.conflict)
 	}
 	var result []Entry
 	for _, id := range orderedKeys(selected) {
@@ -342,7 +339,7 @@ func (s *solver) search(required map[string]bool, selected map[string]selection)
 		if len(compatible) == 0 {
 			s.conflict = s.domainErrors[id]
 			if s.conflict == nil {
-				s.conflict = fmt.Errorf("no available version satisfies the requirements for %s", id)
+				s.conflict = fmt.Errorf("没有可用版本满足 %s 的要求", id)
 			}
 			return false
 		}

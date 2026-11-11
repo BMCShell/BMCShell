@@ -199,7 +199,7 @@ func TestProxyNativeChild(t *testing.T) {
 func TestIPMIRejectsBundledHostOverride(t *testing.T) {
 	t.Setenv("IPMI_PASSWORD", "example")
 	err := Run("127.0.0.1:1", "ipmi", []string{"192.0.2.40", os.Args[0], "user", "-vH192.0.2.50", "mc", "info"}, nil, io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "unsupported IPMI option") {
+	if err == nil || !strings.Contains(err.Error(), "代理模式不支持该 IPMI 选项") {
 		t.Fatalf("got %v; expected option rejection before connecting", err)
 	}
 }

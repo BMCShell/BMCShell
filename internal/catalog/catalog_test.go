@@ -84,12 +84,12 @@ func TestRefreshAndDownload(t *testing.T) {
 	}
 	wrong := cached[0]
 	wrong.SHA256 = strings.Repeat("0", 64)
-	if _, err := Download(context.Background(), wrong, stage); err == nil || !strings.Contains(err.Error(), "SHA256 mismatch") {
+	if _, err := Download(context.Background(), wrong, stage); err == nil || !strings.Contains(err.Error(), "SHA-256 校验失败") {
 		t.Fatalf("checksum error: %v", err)
 	}
 	wrong = cached[0]
 	wrong.Dependencies = map[string]string{"6339f070-59cd-43dc-a9eb-7a0f9e70c392": "1.0.0"}
-	if _, err := Download(context.Background(), wrong, stage); err == nil || !strings.Contains(err.Error(), "manifest does not match") {
+	if _, err := Download(context.Background(), wrong, stage); err == nil || !strings.Contains(err.Error(), "ZIP 清单与软件源索引不一致") {
 		t.Fatalf("manifest metadata error: %v", err)
 	}
 	files, err := os.ReadDir(stage)

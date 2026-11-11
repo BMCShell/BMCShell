@@ -18,16 +18,15 @@ if [[ ! -f $scaffold ]]; then
     exit 2
 fi
 source ./shell/bmcshell.sh
-fixture="$home/scaffold-fixtures"
+fixture="$home/scaffold fixtures"
 mkdir -- "$fixture"
 native_fixture=$(cygpath -aw "$fixture")
 for kind in book library theme tool; do
-    "$scaffold" create --name "bmcshell-$kind-smoke" -o "$native_fixture"
+    "$scaffold" create --name "bmcshell-$kind-smoke" --description "Smoke $kind package." -o "$native_fixture"
 done
 (cd "$fixture/bmcshell-tool-smoke" && mkdir bin && go build -o bin/tool.exe ./cmd/tool)
-for kind in book library theme tool; do
-    bmc plugin install --file "$native_fixture/bmcshell-$kind-smoke"
-done
+bmc plugin install --file "$fixture/bmcshell-book-smoke" "$fixture/bmcshell-library-smoke" \
+    "$fixture/bmcshell-theme-smoke" "$fixture/bmcshell-tool-smoke"
 fixture_id() {
     sed -n 's/^[[:space:]]*"id": "\([^"]*\)",*$/\1/p' "$fixture/bmcshell-$1-smoke/bmc-package.json"
 }
@@ -51,17 +50,19 @@ done
 [[ -f "$home/plugins/theme/$theme_id/1.0.0/bmc-package.json" ]]
 [[ -f "$home/plugins/bundle/$bundle_id/1.0.0/bmc-package.json" ]]
 
-[[ $(bmc_bmcshell_tool_smoke_global) == 'BMCShell global tool is ready.' ]]
+[[ $(bmc_bmcshell_tool_smoke_global) == 'BMCShell 全局工具已就绪。' ]]
 if declare -F bmc_bmcshell_tool_smoke_session >/dev/null; then exit 1; fi
 [[ $(bmc book smoke -s 示例) == *'示例条目'* ]]
 [[ $(bmc book smoke -v) == '1.0.0' ]]
 [[ $(bmc library smoke) == *'结构版本'* ]]
 [[ $(bmc tool bmc_bmcshell_tool_smoke_session --help) == *'示例'* ]]
-[[ $(bmc plugin list tool) == *'bmcshell-tool-smoke'* ]]
+[[ $(bmc plugin list --installed tool) == *'bmcshell-tool-smoke'* ]]
+[[ $(bmc plugin list --installed -d tool) == *'Smoke tool package.'* ]]
+[[ $(bmc plugin list tool) == *'bmcshell-tool-smoke@1.0.0 [已安装]'* ]]
 
 bmc use 192.0.2.10
-[[ $(bmc_bmcshell_tool_smoke_session) == 'Current BMC: 192.0.2.10' ]]
-[[ $(bmc_bmcshell_tool_smoke_shell) == 'Current BMC: 192.0.2.10' ]]
+[[ $(bmc_bmcshell_tool_smoke_session) == '当前 BMC：192.0.2.10' ]]
+[[ $(bmc_bmcshell_tool_smoke_shell) == '当前 BMC：192.0.2.10' ]]
 if bmc use invalid-ip; then
     printf 'Expected the resolver to reject an invalid target.\n' >&2
     exit 1
@@ -74,7 +75,7 @@ bmc use 192.0.2.50 --resolver generic
 [[ $(bmc status) == '192.0.2.50' ]]
 bmc exit
 if declare -F bmc_bmcshell_tool_smoke_session >/dev/null; then exit 1; fi
-[[ $(bmc status) == 'No active BMC target.' ]]
-[[ $(bmc_bmcshell_tool_smoke_global) == 'BMCShell global tool is ready.' ]]
+[[ $(bmc status) == '尚未选中 BMC 目标。请先运行 bmc use <IP>。' ]]
+[[ $(bmc_bmcshell_tool_smoke_global) == 'BMCShell 全局工具已就绪。' ]]
 
 printf 'PASS: scaffolded package types, help, settings, native and Bash tools, target rollback and exit.\n'

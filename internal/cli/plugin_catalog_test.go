@@ -93,12 +93,18 @@ func TestPluginCatalogCLI(t *testing.T) {
 		t.Fatalf("source list = %q", list)
 	}
 	libraryCLI(t, 0, "", "setting", "--reset", "plugin.source.team")
+	publish(versions[2])
+	libraryCLI(t, 1, "", "plugin", "install", libName, toolName)
+	if output := libraryCLI(t, 0, "", "plugin", "list", "--installed"); output != "" {
+		t.Fatalf("failed download left installed packages: %q", output)
+	}
+
 	publish(append(append([]catalog.Entry{}, versions[0]...), versions[1]...))
 	if output := libraryCLI(t, 0, "", "plugin", "search", toolName); !strings.Contains(output, toolName+"@2.0.0") || strings.Contains(output, toolName+"@1.0.0") {
 		t.Fatalf("plugin search = %q", output)
 	}
-	libraryCLI(t, 0, "", "plugin", "install", toolName+"@1.0.0")
-	libraryCLI(t, 0, "", "plugin", "install", libName+"@1.0.0")
+	libraryCLI(t, 1, "", "plugin", "install", toolName+"@1.0.0", toolName+"@2.0.0")
+	libraryCLI(t, 0, "", "plugin", "install", toolName+"@1.0.0", libName+"@1.0.0", libName+"@1.0.0")
 	assertCatalogPackageVersions(t, "1.0.0", toolID, themeID, libID)
 	libraryCLI(t, 1, "", "plugin", "install", themeName)
 	libraryCLI(t, 1, "", "plugin", "install", toolID)
@@ -116,6 +122,35 @@ func TestPluginCatalogCLI(t *testing.T) {
 	publish(versions[2])
 	libraryCLI(t, 1, "", "plugin", "upgrade", toolName)
 	assertCatalogPackageVersions(t, "2.0.0", toolID, themeID, libID)
+}
+
+func TestPluginInstallLocalPackages(t *testing.T) {
+	t.Setenv("BMCSHELL_HOME", t.TempDir())
+	const toolID = "07cf2bd1-1775-4d0a-9d0d-688d464a22c3"
+	const themeID = "66d7a283-c82d-4db3-9e9e-7c57a27c7b65"
+	tool := catalogManifest(toolID, "local-tool-fixture", "toolplugin", "1.0.0")
+	tool.Publisher = "local"
+	tool.Dependencies = map[string]string{themeID: "1.0.0"}
+	theme := catalogManifest(themeID, "local-theme-fixture", "theme", "1.0.0")
+	theme.Publisher = "local"
+	theme.Data = "theme.json"
+	toolDir := catalogFixture(t, tool)
+	themeZip := filepath.Join(t.TempDir(), "theme with spaces.zip")
+	archive := archiveUpgradeFixture(t, catalogFixture(t, theme))
+	if err := os.WriteFile(themeZip, archive, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	libraryCLI(t, 1, "", "plugin", "install", "--file", themeZip, filepath.Join(t.TempDir(), "missing.zip"))
+	if output := libraryCLI(t, 0, "", "plugin", "list", "--installed"); output != "" {
+		t.Fatalf("failed staging left installed packages: %q", output)
+	}
+	output := libraryCLI(t, 0, "", "plugin", "install", "--file", toolDir, themeZip)
+	for _, p := range []packages.Manifest{tool, theme} {
+		if !strings.Contains(output, "已安装 "+p.Name+" "+p.Version) {
+			t.Fatalf("missing install output for %s: %q", p.Name, output)
+		}
+	}
 }
 
 func catalogManifest(id, name, kind, version string) packages.Manifest {

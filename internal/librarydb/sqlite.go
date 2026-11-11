@@ -26,7 +26,7 @@ func open(path, mode string, immutable bool) (*sql.DB, error) {
 		return nil, err
 	}
 	if !file.Mode().IsRegular() {
-		return nil, fmt.Errorf("Library database must be a regular file")
+		return nil, fmt.Errorf("业务库数据库必须是普通文件")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

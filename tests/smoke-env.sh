@@ -15,7 +15,7 @@ package="$fixture/plugin with spaces"
 mkdir -- "$package"
 cleanup() {
     local source="$fixture/plugin with spaces"
-    rm -f -- "$fixture/stdout" "$source"/{bmc-package.json,help.json,changelog.json,env.csv,read.sh,write.sh,credential.sh}
+    rm -f -- "$fixture/stdout" "$fixture/stderr" "$source"/{bmc-package.json,help.json,changelog.json,env.csv,read.sh,write.sh,credential.sh}
     rmdir -- "$source" "$fixture"
 }
 trap cleanup EXIT
@@ -85,8 +85,10 @@ bmc plugin install --file "$package"
 COMP_WORDS=(bmc tool smoke_) COMP_CWORD=2
 _bmcshell_complete
 [[ " ${COMPREPLY[*]} " == *' smoke_read '* ]]
-bmc use 192.0.2.10
-if bmc use invalid-ip; then exit 1; fi
+bmc use 192.0.2.10 > "$fixture/stdout" 2> "$fixture/stderr"
+[[ ! -s $fixture/stdout && $(< "$fixture/stderr") == '已选择 BMC 目标 192.0.2.10。' ]]
+if bmc use invalid-ip 2> "$fixture/stderr"; then exit 1; fi
+[[ $(< "$fixture/stderr") != *'已选择 BMC 目标'* ]]
 [[ $(bmc status) == '192.0.2.10' ]]
 if smoke_credential; then exit 1; fi
 _BMCSHELL_SESSION_STATE[v2.password]=test-only
@@ -97,10 +99,11 @@ smoke_credential
 # Previously saved installation defaults remain readable.
 printf '%s\n' '{"env.defaults":{"SMOKE_TARGET_MODEL":"installation default"}}' > "$home/settings.json"
 status=$(bmc status --env)
-[[ $status == *'BMCSHELL_AUTH_PASSWORD = [redacted]'* && $status != *test-only* ]]
+[[ $status == *'BMCSHELL_AUTH_PASSWORD = [已隐藏]'* && $status != *test-only* ]]
 [[ $(bmc status) == '192.0.2.10' ]]
 [[ $(smoke_read read) == '192.0.2.10|installation default|read' ]]
-if smoke_write reject > "$fixture/stdout"; then exit 1; else [[ $? == 7 ]]; fi
+if smoke_write reject > "$fixture/stdout" 2> "$fixture/stderr"; then exit 1; else [[ $? == 7 ]]; fi
+[[ $(< "$fixture/stderr") == *'子进程退出码 7'* ]]
 [[ $(cat "$fixture/stdout") == 'tool stdout' ]]
 [[ $(smoke_read read) == '192.0.2.10|installation default|read' ]]
 smoke_write > "$fixture/stdout"
@@ -123,6 +126,9 @@ bmc proxy -m 127.0.0.1:1082 >/dev/null
 [[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1082 && $https_proxy == socks5h://127.0.0.1:1082 ]]
 bmc exit
 [[ $BMCSHELL_PROXY_ADDRESS == 127.0.0.1:1082 ]]
+status=$(BMCSHELL_SNMP_ENTERPRISES=0 bmc status --env)
+[[ $status == *'BMCSHELL_PROXY_ADDRESS = 127.0.0.1:1082'* && $status == *'BMCSHELL_SNMP_ENTERPRISES = 0'* ]]
+[[ $(bmc status) == '尚未选中 BMC 目标。请先运行 bmc use <IP>。' ]]
 bmc proxy off >/dev/null
 [[ ! ${BMCSHELL_PROXY_ADDRESS+x} && ! ${ALL_PROXY+x} && $NO_PROXY == localhost,192.0.2.1 ]]
 [[ $(declare -p http_proxy) == 'declare -- http_proxy="http://previous.example:1234"' ]]

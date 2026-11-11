@@ -22,7 +22,7 @@ func readSource(root string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Size() > 49 {
-		return "", errors.New("invalid installed package source marker")
+		return "", errors.New("已安装包的来源标记无效")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -30,7 +30,7 @@ func readSource(root string) (string, error) {
 	}
 	source := strings.TrimSuffix(string(data), "\n")
 	if !originName.MatchString(source) {
-		return "", errors.New("invalid installed package source name")
+		return "", errors.New("已安装包的软件源名称无效")
 	}
 	return source, nil
 }

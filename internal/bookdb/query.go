@@ -16,7 +16,7 @@ import (
 
 const bodyLimit = 2 << 20
 
-var ErrNoMatch = errors.New("no matching book entry")
+var ErrNoMatch = errors.New("未找到匹配的工具书条目")
 
 type operation struct {
 	where  string
@@ -25,6 +25,8 @@ type operation struct {
 }
 
 type Display struct {
+	// Command is the full invocation prefix used in generated help.
+	Command string
 	// Width enables terminal Markdown rendering when positive.
 	Width int
 	// ListHeader can mark the first row for a pager. It writes the row itself.
@@ -56,7 +58,7 @@ func QueryWithEnvironment(out io.Writer, path string, args []string, cid string,
 	}
 	defer db.Close()
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		meta.renderHelp(out)
+		meta.renderHelp(out, display.Command)
 		return nil
 	}
 	rendering, err := meta.rendering(cid, registry, values)
@@ -117,7 +119,7 @@ func QueryWithEnvironment(out io.Writer, path string, args []string, cid string,
 		}
 		length, _ := values[len(meta.List)+1].(int64)
 		if length > bodyLimit {
-			return errors.New("book entry body exceeds 2 MiB")
+			return errors.New("工具书条目正文超过 2 MiB")
 		}
 		body, _ := values[len(meta.List)].(string)
 		if body == "" {
@@ -176,7 +178,7 @@ func (m metadata) parse(args []string, enterprise string) (operation, error) {
 	}
 	if args[0] == "-s" || args[0] == "--search" {
 		if len(args) != 2 || len(m.Search) == 0 || !validArgument(args[1]) {
-			return operation{}, errors.New("this book requires one valid search term")
+			return operation{}, errors.New("请为此工具书提供一个有效的搜索关键词")
 		}
 		parts, values := make([]string, len(m.Search)), make([]any, len(m.Search))
 		for i, field := range m.Search {
@@ -186,7 +188,7 @@ func (m metadata) parse(args []string, enterprise string) (operation, error) {
 		return operation{where: " WHERE " + strings.Join(parts, " OR "), values: values}, nil
 	}
 	if !m.Details {
-		return operation{}, errors.New("this book does not support detail lookup")
+		return operation{}, errors.New("此工具书不支持查看条目详情")
 	}
 	return m.parseLookup(args, enterprise)
 }
@@ -198,7 +200,7 @@ func (m metadata) parseLookup(args []string, enterprise string) (operation, erro
 		option, values = args[0], args[1:]
 	} else if len(args) == 1 && strings.HasPrefix(args[0], "[") {
 		if !strings.HasSuffix(args[0], "]") {
-			return operation{}, errors.New("lookup brackets must be paired")
+			return operation{}, errors.New("查找参数的方括号必须成对出现")
 		}
 		values = strings.Fields(args[0][1 : len(args[0])-1])
 	}
@@ -224,7 +226,7 @@ func (m metadata) parseLookup(args []string, enterprise string) (operation, erro
 		}
 		return operation{where: " WHERE " + strings.Join(parts, " AND "), values: bound, detail: true}, nil
 	}
-	return operation{}, errors.New("unsupported book lookup or incorrect number of arguments; use bmc book <book> --help")
+	return operation{}, errors.New("工具书不支持该查找方式，或参数数量不正确。请用 bmc book <书名> --help 查看用法")
 }
 
 func validArgument(value string) bool {
@@ -233,7 +235,7 @@ func validArgument(value string) bool {
 
 func (m metadata) lookupValue(field, value, enterprise string) (any, error) {
 	if !validArgument(value) {
-		return nil, fmt.Errorf("invalid lookup argument for %s", field)
+		return nil, fmt.Errorf("字段 %s 的查找参数无效", field)
 	}
 	format := m.Options[field].Format
 	switch format {
@@ -257,24 +259,63 @@ func (m metadata) lookupValue(field, value, enterprise string) (any, error) {
 	default:
 		return value, nil
 	}
-	return nil, fmt.Errorf("invalid %s lookup for %s", format, field)
+	return nil, fmt.Errorf("类型为 %s 的查找值不适用于字段 %s", format, field)
 }
 
-func (m metadata) renderHelp(out io.Writer) {
-	fmt.Fprintln(out, safe(m.Title))
-	fmt.Fprintln(out, "-l / --list：列表")
+func (m metadata) renderHelp(out io.Writer, command string) {
+	if command == "" {
+		command = "bmc book " + m.Name
+	}
+	topic := render.Topic{
+		Summary: safe(m.Title),
+		Usage:   []string{command + " [-l|--list]", command + " [-v|--version]"},
+	}
+	if m.Description != "" && m.Description != m.Title {
+		topic.Summary += "\n" + safe(m.Description)
+	}
+	topic.Options = append(topic.Options, render.Option{
+		Name: "-l, --list", Description: "列出索引。省略查询参数时也会列出索引。",
+	}, render.Option{
+		Name: "-v, --version", Description: "查看工具书版本。",
+	})
 	if len(m.Search) != 0 {
-		fmt.Fprintln(out, "-s / --search 关键词：搜索")
+		topic.Usage = append(topic.Usage, command+" -s <关键词>")
+		topic.Options = append(topic.Options, render.Option{
+			Name: "-s, --search <关键词>", Description: "搜索" + strings.Join(m.helpFieldNames(m.Search), "、") + "中包含关键词的条目。",
+		})
 	}
 	for _, rule := range m.Lookups {
-		fmt.Fprintln(out, rule.Option+" "+strings.Join(rule.Fields, " "))
+		names := m.helpFieldNames(rule.Fields)
+		arguments := "<" + strings.Join(names, "> <") + ">"
+		invocation := rule.Option + " " + arguments
+		description := "按" + strings.Join(names, "、") + "查看详情。"
+		if rule.Positional {
+			invocation = "[" + rule.Option + "] " + arguments
+			description += "也可直接传入对应值。"
+		}
+		topic.Usage = append(topic.Usage, command+" "+invocation)
+		topic.Options = append(topic.Options, render.Option{
+			Name: rule.Option + " " + arguments, Description: description,
+		})
 	}
+	topic.Examples = append(topic.Examples, render.Example{
+		Command: command + " -l", Description: "列出工具书索引。",
+	})
 	if m.Help != "" {
-		fmt.Fprintln(out, safe(m.Help))
+		topic.Notes = append(topic.Notes, safe(m.Help))
 	}
 	if m.Source != "" {
-		fmt.Fprintln(out, "来源："+safe(m.Source))
+		topic.Notes = append(topic.Notes, "资料来源 "+safe(m.Source))
 	}
+	render.Help(out, topic, true)
+}
+
+func (m metadata) helpFieldNames(fields []string) []string {
+	names := make([]string, len(fields))
+	for i, field := range fields {
+		names[i] = m.title(field)
+	}
+	return names
 }
 
 func (m metadata) title(field string) string {

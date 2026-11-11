@@ -53,7 +53,7 @@ func TestInstallCanonicalIdentity(t *testing.T) {
 	}
 	m.Name = "other-book-redfish"
 	encode()
-	if _, err := s.Install(writeFixtureZIP(t, files)); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := s.Install(writeFixtureZIP(t, files)); err == nil || !strings.Contains(err.Error(), "不一致") {
 		t.Fatalf("mismatched identity: %v", err)
 	}
 	m.Name = "sbmc-book-redfish"

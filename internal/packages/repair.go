@@ -35,7 +35,7 @@ type repairSuggestion struct {
 
 func ParseRepairList(source string, data []byte) ([]RepairRecord, error) {
 	if len(data) > maxRepairListBytes {
-		return nil, errors.New("repair suggestions exceed 64 KiB")
+		return nil, errors.New("修复建议超过 64 KiB")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -44,10 +44,10 @@ func ParseRepairList(source string, data []byte) ([]RepairRecord, error) {
 		return nil, err
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, errors.New("repair suggestions must contain one JSON object")
+		return nil, errors.New("修复建议须包含一个 JSON 对象")
 	}
 	if list.Schema != 1 || list.Suggestions == nil || len(list.Suggestions) > 128 {
-		return nil, errors.New("repair suggestions require schema 1 and an array of at most 128 entries")
+		return nil, errors.New("修复建议须使用 schema 1，并提供不超过 128 项的数组")
 	}
 	records := make([]RepairRecord, 0, len(list.Suggestions))
 	for i, item := range list.Suggestions {
@@ -55,11 +55,11 @@ func ParseRepairList(source string, data []byte) ([]RepairRecord, error) {
 			strings.TrimSpace(item.Suggestion) == "" || len(item.Suggestion) > 1200 ||
 			strings.ContainsFunc(item.Suggestion, unicode.IsControl) ||
 			item.Platform != "" && (len(item.Platform) > 40 || !repairPlatform.MatchString(item.Platform)) {
-			return nil, fmt.Errorf("invalid repair suggestion at entry %d", i+1)
+			return nil, fmt.Errorf("第 %d 项修复建议无效", i+1)
 		}
 		if item.Manager != "" || item.Package != "" {
 			if item.Manager != "msys2" || item.Platform != "windows-amd64" || !repairPackage.MatchString(item.Package) {
-				return nil, fmt.Errorf("invalid package manager recipe at entry %d", i+1)
+				return nil, fmt.Errorf("第 %d 项包管理器安装方案无效", i+1)
 			}
 		}
 		records = append(records, RepairRecord{
@@ -76,7 +76,7 @@ func (p Package) RepairRecords() ([]RepairRecord, error) {
 	}
 	records, err := p.loadRepairRecords()
 	if err != nil {
-		return nil, fmt.Errorf("%s repair suggestions: %w", p.Name, err)
+		return nil, fmt.Errorf("%s 的修复建议无效：%w", p.Name, err)
 	}
 	return records, nil
 }
@@ -105,7 +105,7 @@ func (p Package) loadRepairRecords() ([]RepairRecord, error) {
 	}
 	for _, record := range records {
 		if !dependencies[record.Dependency] {
-			return nil, fmt.Errorf("repair suggestion references undeclared dependency %q", record.Dependency)
+			return nil, fmt.Errorf("修复建议引用了未声明的依赖 %q", record.Dependency)
 		}
 	}
 	return records, nil

@@ -83,7 +83,7 @@ func openBook(path string) (*sql.DB, metadata, error) {
 		return nil, meta, err
 	}
 	if !file.Mode().IsRegular() {
-		return nil, meta, errors.New("book database must be a regular file")
+		return nil, meta, errors.New("工具书数据库必须是普通文件")
 	}
 	db, err := open(path, "ro")
 	if err != nil {
@@ -92,7 +92,7 @@ func openBook(path string) (*sql.DB, metadata, error) {
 	meta, err = loadMetadata(db)
 	if err != nil {
 		db.Close()
-		return nil, meta, fmt.Errorf("book metadata: %w", err)
+		return nil, meta, fmt.Errorf("无法读取工具书元数据：%w", err)
 	}
 	return db, meta, nil
 }
@@ -104,7 +104,7 @@ func loadMetadata(db *sql.DB) (metadata, error) {
 		return m, err
 	}
 	if version != 1 {
-		return m, fmt.Errorf("unsupported book database version %d", version)
+		return m, fmt.Errorf("工具书数据库版本 %d 不受支持", version)
 	}
 	if err := checkTable(db, "book_meta"); err != nil {
 		return m, err
@@ -120,7 +120,7 @@ func loadMetadata(db *sql.DB) (metadata, error) {
 		return m, err
 	}
 	if count != 1 || maxSize > metadataLimit {
-		return m, errors.New("book_meta must contain one row of at most 256 KiB")
+		return m, errors.New("book_meta 须恰好包含一条记录，且大小不得超过 256 KiB")
 	}
 	var id, schema, details int
 	var list, search, lookups, options, order string
@@ -132,10 +132,10 @@ func loadMetadata(db *sql.DB) (metadata, error) {
 		return m, err
 	}
 	if id != 1 || schema != version || !bookName.MatchString(m.Name) || (details != 0 && details != 1) {
-		return m, errors.New("invalid book_meta identity, version, name or detail flag")
+		return m, errors.New("book_meta 的标识、版本、名称或详情开关无效")
 	}
 	if m.ContentFormat != "plain" && m.ContentFormat != "markdown" {
-		return m, errors.New("unsupported content format")
+		return m, errors.New("不支持该正文格式")
 	}
 	m.Details = details == 1
 	for _, value := range []struct {
@@ -158,7 +158,7 @@ func loadMetadata(db *sql.DB) (metadata, error) {
 
 func decodeMetadata(text string, target any) error {
 	if !json.Valid([]byte(text)) || strings.TrimSpace(text) == "null" {
-		return errors.New("expected non-null JSON")
+		return errors.New("需要非 null 的 JSON 值")
 	}
 	if err := uniqueKeys(json.NewDecoder(strings.NewReader(text)), 0); err != nil {
 		return err
@@ -170,7 +170,7 @@ func decodeMetadata(text string, target any) error {
 
 func uniqueKeys(dec *json.Decoder, depth int) error {
 	if depth > 32 {
-		return errors.New("JSON nesting too deep")
+		return errors.New("JSON 嵌套层级过多")
 	}
 	token, err := dec.Token()
 	if err != nil {
@@ -186,7 +186,7 @@ func uniqueKeys(dec *json.Decoder, depth int) error {
 			}
 			name := key.(string) // The JSON decoder validates object key tokens.
 			if keys[name] {
-				return fmt.Errorf("duplicate JSON key %q", name)
+				return fmt.Errorf("JSON 键 %q 重复", name)
 			}
 			keys[name] = true
 			if err := uniqueKeys(dec, depth+1); err != nil {
@@ -208,12 +208,12 @@ func uniqueKeys(dec *json.Decoder, depth int) error {
 
 func checkTable(db *sql.DB, name string) error {
 	if !identifier.MatchString(name) {
-		return fmt.Errorf("invalid table identifier %q", name)
+		return fmt.Errorf("数据表标识 %q 无效", name)
 	}
 	var kind string
 	err := db.QueryRow(`SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = ?`, name).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && kind != "table") {
-		return fmt.Errorf("%q must be an ordinary table", name)
+		return fmt.Errorf("%q 必须是普通数据表", name)
 	}
 	return err
 }
@@ -248,7 +248,7 @@ func (m *metadata) validate(db *sql.DB) error {
 		return err
 	}
 	if len(m.List) == 0 || len(m.Order) == 0 || m.Order[len(m.Order)-1] != "id" || pkCount != 1 || !idPK {
-		return errors.New("book needs list fields and a stable order ending in the primary key id")
+		return errors.New("工具书须声明列表字段和稳定排序，最后一个排序字段须为主键 id")
 	}
 	for _, fields := range [][]string{m.List, m.Search, m.Order} {
 		if err := m.validateFields(fields); err != nil {
@@ -257,25 +257,25 @@ func (m *metadata) validate(db *sql.DB) error {
 	}
 	for _, field := range m.Search {
 		if m.fields[field] != "TEXT" {
-			return fmt.Errorf("search field %q must be TEXT", field)
+			return fmt.Errorf("搜索字段 %q 须为 TEXT 类型", field)
 		}
 	}
 	if m.Details && (!identifier.MatchString(m.Body) || m.fields[m.Body] != "TEXT") {
-		return errors.New("detail body must be a TEXT field")
+		return errors.New("详情正文必须存放在 TEXT 字段")
 	}
 	if !m.Details && len(m.Lookups) != 0 {
-		return errors.New("lookup rules require detail support")
+		return errors.New("启用详情功能后才能定义查找规则")
 	}
 	seenOptions, seenNames, seenArity := map[string]bool{}, map[string]bool{}, map[int]bool{}
 	for _, rule := range m.Lookups {
 		switch rule.Option {
 		case "--id", "--name", "--key":
 		default:
-			return fmt.Errorf("unsupported lookup option %q", rule.Option)
+			return fmt.Errorf("不支持查找选项 %q", rule.Option)
 		}
 		if rule.Name == "" || seenNames[rule.Name] || seenOptions[rule.Option] || len(rule.Fields) == 0 ||
 			(rule.Positional && seenArity[len(rule.Fields)]) {
-			return errors.New("duplicate or invalid lookup rule")
+			return errors.New("查找规则重复或无效")
 		}
 		seenOptions[rule.Option], seenNames[rule.Name] = true, true
 		if rule.Positional {
@@ -291,20 +291,20 @@ func (m *metadata) validate(db *sql.DB) error {
 		}
 		if len(option.Substitutions) != 0 && (m.fields[field] != "TEXT" ||
 			(option.Format != "" && option.Format != "text" && option.Format != "oid")) {
-			return fmt.Errorf("substitutions require a text field, got %q", field)
+			return fmt.Errorf("工具书替换仅支持文本字段，字段 %q 不是文本", field)
 		}
 		for token, variable := range option.Substitutions {
 			if !bookToken.MatchString(token) || !envregistry.ValidName(variable) {
-				return fmt.Errorf("invalid Book substitution in %q", field)
+				return fmt.Errorf("工具书字段 %q 的替换配置无效", field)
 			}
 		}
 		if option.Width != 0 && (option.Width < 4 || option.Width > 120) {
-			return fmt.Errorf("invalid width for %q", field)
+			return fmt.Errorf("字段 %q 的显示宽度无效", field)
 		}
 		switch option.Format {
 		case "", "text", "integer", "hex8", "oid", "support":
 		default:
-			return fmt.Errorf("unsupported format %q", option.Format)
+			return fmt.Errorf("不支持格式 %q", option.Format)
 		}
 	}
 	return nil
@@ -315,7 +315,7 @@ func (m metadata) validateFields(fields []string) error {
 	for _, field := range fields {
 		_, exists := m.fields[field]
 		if seen[field] || !identifier.MatchString(field) || !exists {
-			return fmt.Errorf("invalid or duplicate field %q", field)
+			return fmt.Errorf("字段 %q 无效或重复", field)
 		}
 		seen[field] = true
 	}

@@ -32,7 +32,7 @@ func (m metadata) rendering(cid string, registry envregistry.Registry, values ma
 			if value := values[enterpriseVariable]; value != "" {
 				registered, exists := registry[enterpriseVariable]
 				if !exists || registered.Sensitive || registered.Validate(value) != nil {
-					return bookRendering{}, fmt.Errorf("invalid registered field %s", enterpriseVariable)
+					return bookRendering{}, fmt.Errorf("登记字段 %s 的值无效", enterpriseVariable)
 				}
 				result.enterprise = value
 				if !strings.Contains(value, ".") && strings.Trim(value, "0") != "" {
@@ -44,11 +44,11 @@ func (m metadata) rendering(cid string, registry envregistry.Registry, values ma
 		for token, variable := range option.Substitutions {
 			registered, exists := registry[variable]
 			if !exists || registered.Sensitive {
-				return bookRendering{}, fmt.Errorf("Book substitution requires a registered public field: %s", variable)
+				return bookRendering{}, fmt.Errorf("工具书只能替换已登记的公开字段，字段 %s 不符合要求", variable)
 			}
 			if value, present := values[variable]; present {
 				if len(value) > 256 || registered.Validate(value) != nil || !validArgument(value) || strings.ContainsFunc(value, func(r rune) bool { return unicode.Is(unicode.Cf, r) }) {
-					return bookRendering{}, fmt.Errorf("invalid Book substitution value for %s", variable)
+					return bookRendering{}, fmt.Errorf("用于工具书替换的字段 %s 值无效", variable)
 				}
 				pairs = append(pairs, token, value)
 			}
@@ -89,7 +89,7 @@ func (r bookRendering) apply(field, format, text string) (string, error) {
 	replacer := r.fields[field]
 	if replacer == nil {
 		if len(text) > bodyLimit {
-			return "", errors.New("Book field exceeds 2 MiB after substitution")
+			return "", errors.New("替换后工具书字段超过 2 MiB")
 		}
 		return text, nil
 	}
@@ -108,7 +108,7 @@ func (s *substitutedText) Write(p []byte) (int, error) {
 
 func (s *substitutedText) WriteString(text string) (int, error) {
 	if len(text) > bodyLimit-s.Len() {
-		return 0, errors.New("Book field exceeds 2 MiB after substitution")
+		return 0, errors.New("替换后工具书字段超过 2 MiB")
 	}
 	return s.Builder.WriteString(text)
 }

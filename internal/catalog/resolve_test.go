@@ -17,17 +17,27 @@ func TestResolveCatalogDependenciesAndSourcePin(t *testing.T) {
 		{ID: book, Name: "sbmc-book-test", Type: "book", Version: "1.0.0", Source: "official"},
 		{ID: book, Name: "sbmc-book-test", Type: "book", Version: "2.0.0", Source: "official"},
 	}
-	if _, err := ResolveInstall(entries, nil, []string{"sbmc-tool-test"}, ""); err == nil {
+	if _, err := ResolveInstall(entries, nil, []InstallTarget{{ID: tool}}); err == nil {
 		t.Fatal("multiple sources for the same ID should require a source")
 	}
-	assertVersions(t, mustResolve(t)(ResolveInstall(entries, nil, []string{"sbmc-tool-test"}, "official")),
+	assertVersions(t, mustResolve(t)(ResolveInstall(entries, nil, []InstallTarget{{ID: tool, Source: "official"}})),
 		map[string]string{tool: "2.0.0", book: "1.0.0"})
 	installed := []packages.Package{{Manifest: entryManifest(entries[0]), Source: "official"}}
 	assertVersions(t, mustResolve(t)(ResolveUpgrade(entries, installed, []string{tool}, "")),
 		map[string]string{tool: "2.0.0", book: "1.0.0"})
 	entries = append(entries, Entry{ID: book, Name: "sbmc-book-test", Type: "book", Version: "1.0.0", Source: "custom"})
-	assertVersions(t, mustResolve(t)(ResolveInstall(entries, nil, []string{tool}, "official")),
+	assertVersions(t, mustResolve(t)(ResolveInstall(entries, nil, []InstallTarget{{ID: tool, Source: "official"}})),
 		map[string]string{tool: "2.0.0", book: "1.0.0"})
+	plan := mustResolve(t)(ResolveInstall(entries, nil, []InstallTarget{
+		{ID: tool, Source: "official"},
+		{ID: book, Source: "custom", Version: "1.0.0"},
+	}))
+	assertVersions(t, plan, map[string]string{tool: "2.0.0", book: "1.0.0"})
+	for _, entry := range plan {
+		if entry.ID == tool && entry.Source != "official" || entry.ID == book && entry.Source != "custom" {
+			t.Fatalf("unexpected source in mixed-source plan: %#v", entry)
+		}
+	}
 }
 
 func TestResolveLibraryBacktracksToCompatibleToolAndLibrary(t *testing.T) {

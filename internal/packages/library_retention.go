@@ -30,13 +30,13 @@ func rememberLibraryPredecessor(tx *sql.Tx, activation LibraryActivation) error 
 	}
 	version, generation := activation.PredecessorVersion, activation.PredecessorGeneration
 	if version == activation.Version || ValidateVersion(version) != nil || !libraryGenerationName.MatchString(generation) {
-		return errors.New("invalid Library history predecessor")
+		return errors.New("业务库历史中的上一个版本无效")
 	}
 	var current string
 	err := tx.QueryRow("SELECT generation FROM library_generations WHERE id = ? AND version = ?",
 		activation.ID, version).Scan(&current)
 	if err != nil || current != generation {
-		return errors.New("Library history predecessor changed; prepare the update again")
+		return errors.New("业务库历史中的上一个版本已变更，请重新准备更新")
 	}
 	if _, err := tx.Exec("CREATE TABLE IF NOT EXISTS library_upgrade_history (" +
 		"id TEXT NOT NULL, version TEXT NOT NULL, generation TEXT NOT NULL, " +
@@ -89,7 +89,7 @@ func (s *Store) RetireLibraryHistory(expected []string) error {
 		return err
 	}
 	if !slices.Equal(libraryHistoryPaths(candidates), expected) {
-		return errors.New("Library history differs from the verified backup; preview it again")
+		return errors.New("业务库历史记录与已验证的备份不一致，请重新预览")
 	}
 	var retired []libraryHistoryReference
 	for _, candidate := range candidates {
@@ -121,7 +121,7 @@ func (s *Store) RetireLibraryHistory(expected []string) error {
 			return err
 		}
 		if count != 1 {
-			return errors.New("Library history registration changed; preview it again")
+			return errors.New("业务库历史登记已变更，请重新预览")
 		}
 	}
 	return tx.Commit()
@@ -198,7 +198,7 @@ func (s *Store) libraryHistoryProtectedVersions(db *sql.DB, installed []registry
 	protected := make(map[string]map[string]bool)
 	protect := func(id, version string) error {
 		if !packageID.MatchString(id) || ValidateVersion(version) != nil {
-			return errors.New("invalid Library history release")
+			return errors.New("业务库历史中的发布版本无效")
 		}
 		if protected[id] == nil {
 			protected[id] = make(map[string]bool)
@@ -281,7 +281,7 @@ func libraryHistoryGenerations(db *sql.DB, id, activeVersion string) (map[string
 			return nil, "", err
 		}
 		if ValidateVersion(version) != nil || !libraryGenerationName.MatchString(generation) {
-			return nil, "", errors.New("invalid registered Library history generation")
+			return nil, "", errors.New("已登记的业务库历史数据版本无效")
 		}
 		generations[generation] = append(generations[generation], version)
 		if version == activeVersion {
@@ -314,7 +314,7 @@ func libraryHistoryPredecessors(db *sql.DB, id string) (map[string]libraryHistor
 			return nil, err
 		}
 		if ValidateVersion(predecessor.version) != nil || !libraryGenerationName.MatchString(generation) {
-			return nil, errors.New("invalid Library history predecessor")
+			return nil, errors.New("业务库历史中的上一个版本无效")
 		}
 		history[generation] = predecessor
 	}

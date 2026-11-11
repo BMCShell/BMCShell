@@ -31,7 +31,7 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 	switch mode {
 	case "ssh":
 		if len(args) != 2 {
-			return errors.New("usage: proxy ssh <IPv4> <port>")
+			return errors.New("用法 proxy ssh <IPv4> <端口>")
 		}
 		port, err := parsePort(args[1])
 		if err != nil {
@@ -44,7 +44,7 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 		return relayTCP(proxy, target, stdin, stdout)
 	case "ipmi-native":
 		if len(args) < 4 || !filepath.IsAbs(args[3]) {
-			return errors.New("usage: proxy ipmi-native <host> <port> <family> <absolute executable> [args...]")
+			return errors.New("用法 proxy ipmi-native <主机> <端口> <地址族> <可执行文件绝对路径> [参数 ...]")
 		}
 		port, err := parseIPMIPort(args[1])
 		if err != nil {
@@ -63,18 +63,18 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 		})
 	case "ipmi", "snmp":
 		if len(args) < 3 || !filepath.IsAbs(args[1]) {
-			return fmt.Errorf("proxy %s requires a target, absolute executable path and tool arguments", mode)
+			return fmt.Errorf("代理模式 %s 需要目标、可执行文件的绝对路径和工具参数", mode)
 		}
 		var port uint16 = defaultIPMIPort
 		arguments := args[3:]
 		insert, localFormat := 5, "%d"
 		if mode == "ipmi" {
 			if _, present := os.LookupEnv("IPMI_PASSWORD"); !present {
-				return errors.New("IPMI_PASSWORD is required")
+				return errors.New("须设置 IPMI_PASSWORD")
 			}
 			for _, arg := range arguments {
 				if strings.HasPrefix(arg, "-") && !ipmiOption.MatchString(arg) {
-					return errors.New("unsupported IPMI option in proxy mode; host, port and credentials are managed by BMCShell")
+					return errors.New("代理模式不支持该 IPMI 选项。主机、端口和凭据由 BMCShell 管理")
 				}
 			}
 			arguments = append([]string{"-I", "lanplus", "-H", "127.0.0.1", "-p", "-U", args[2], "-E"}, arguments...)
@@ -82,7 +82,7 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 			port, localFormat = 161, "udp:127.0.0.1:%d"
 			insert, err = strconv.Atoi(args[2])
 			if err != nil || insert < 0 || insert > len(arguments) {
-				return errors.New("invalid SNMP agent insertion index")
+				return errors.New("SNMP 代理地址的参数位置无效")
 			}
 		}
 		target, err := endpoint(args[0], port)
@@ -98,7 +98,7 @@ func Run(address, mode string, args []string, stdin io.Reader, stdout, stderr io
 			return cmd
 		})
 	default:
-		return fmt.Errorf("unknown SOCKS5 relay mode %q", mode)
+		return fmt.Errorf("未知的 SOCKS5 转发模式 %q", mode)
 	}
 }
 
@@ -179,7 +179,7 @@ func relayUDP(proxy, target netip.AddrPort, buildCommand func(uint16) *exec.Cmd)
 		var probe [1]byte
 		_, err := control.Read(probe[:])
 		if err == nil || errors.Is(err, io.EOF) {
-			err = errors.New("SOCKS5 closed or changed the UDP association")
+			err = errors.New("SOCKS5 关闭或更改了 UDP 关联")
 		}
 		failures <- err
 	}()
@@ -195,7 +195,7 @@ func relayUDP(proxy, target netip.AddrPort, buildCommand func(uint16) *exec.Cmd)
 		default:
 			_ = cmd.Process.Kill()
 			<-result
-			return fmt.Errorf("SOCKS5 UDP relay: %w", err)
+			return fmt.Errorf("SOCKS5 UDP 转发失败：%w", err)
 		}
 	}
 }

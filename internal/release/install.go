@@ -35,6 +35,7 @@ const (
 	releasesDir       = "releases"
 	activeRelease     = "active"
 	maxVersionLength  = 128
+	maxManifestBytes  = 16 << 10
 	maxArchiveBytes   = 128 << 20
 	maxExpandedBytes  = 256 << 20
 )
@@ -69,7 +70,7 @@ func Install(executable, archivePath string) (string, error) {
 	}
 	unlock, err := filelock.Acquire(filepath.Join(install, ".release-update.lock"))
 	if err != nil {
-		return "", fmt.Errorf("lock BMCShell release update: %w", err)
+		return "", fmt.Errorf("无法锁定 BMCShell 发布更新：%w", err)
 	}
 	defer unlock()
 	m, err := readManifest(archivePath)
@@ -132,7 +133,7 @@ func validVersion(version string) bool {
 
 func installationRoot(executable string) (string, error) {
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
-		return "", errors.New("core release updates require Windows x64")
+		return "", errors.New("更新框架需要 Windows x64")
 	}
 	path, err := filepath.EvalSymlinks(executable)
 	if err != nil {
@@ -154,11 +155,11 @@ func installationRoot(executable string) (string, error) {
 		if !strings.EqualFold(filepath.Base(path), executableName) ||
 			!regularFile(filepath.Join(directory, executableName)) ||
 			!regularFile(filepath.Join(directory, filepath.FromSlash(bridgeName))) {
-			return "", errors.New("core updates require an extracted BMCShell release")
+			return "", errors.New("更新框架需要已解压的 BMCShell 发布版")
 		}
 	}
 	if _, err := os.Lstat(filepath.Join(directory, ".git")); !errors.Is(err, os.ErrNotExist) {
-		return "", errors.New("core updates require an extracted release outside the source checkout")
+		return "", errors.New("请在源码目录外解压并运行 BMCShell 发布版，再执行更新")
 	}
 	return directory, nil
 }
@@ -169,7 +170,7 @@ func ensureDirectory(path string) error {
 	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() {
-		return fmt.Errorf("invalid core release directory %q", path)
+		return fmt.Errorf("框架发布目录 %q 无效", path)
 	}
 	return nil
 }
@@ -191,7 +192,7 @@ func publishRelease(source, destination string) error {
 		return err
 	}
 	if existing != incoming {
-		return fmt.Errorf("core release %s already exists with different contents; close BMCShell terminals and follow the release recovery instructions", filepath.Base(destination))
+		return fmt.Errorf("框架版本 %s 已存在且内容不同。请关闭 BMCShell 终端，按发布恢复说明处理", filepath.Base(destination))
 	}
 	return nil
 }
@@ -201,7 +202,7 @@ func publishLauncher(source, destination string) error {
 	// launcher can also repair an empty or modified existing script.
 	if info, err := os.Lstat(destination); err == nil {
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("invalid portable BMCShell launcher %q", destination)
+			return fmt.Errorf("便携版 BMCShell 启动程序 %q 无效", destination)
 		}
 		incoming, err := os.ReadFile(source)
 		if err != nil {
@@ -242,7 +243,7 @@ func payloadDigest(root string) (string, error) {
 			return nil
 		}
 		if !info.Mode().IsRegular() || info.Size() > remaining {
-			return errors.New("invalid installed core release file")
+			return errors.New("已安装的框架发布文件无效")
 		}
 		fmt.Fprintf(hash, "file %q %d\n", filepath.ToSlash(relative), info.Size())
 		file, err := os.Open(path)
@@ -254,7 +255,7 @@ func payloadDigest(root string) (string, error) {
 			return err
 		}
 		if n != info.Size() {
-			return errors.New("installed core release changed during verification")
+			return errors.New("已安装的框架发布版在验证期间发生变更")
 		}
 		remaining -= n
 		return nil
@@ -271,26 +272,25 @@ func readManifest(archivePath string) (manifest, error) {
 	var m manifest
 	ext := filepath.Ext(archivePath)
 	if !strings.EqualFold(ext, ".zip") {
-		return m, errors.New("core update requires a release ZIP file")
+		return m, errors.New("更新框架需要提供发布 ZIP 文件")
 	}
 	path := strings.TrimSuffix(archivePath, ext) + ".manifest.json"
 	file, err := os.Open(path)
 	if err != nil {
-		return m, fmt.Errorf("read release checksum manifest: %w", err)
+		return m, fmt.Errorf("读取发布校验清单失败：%w", err)
 	}
 	defer file.Close()
-	const maxManifestBytes = 16 << 10
 	data, err := io.ReadAll(io.LimitReader(file, maxManifestBytes+1))
 	if err != nil {
 		return m, err
 	}
 	if len(data) > maxManifestBytes || json.Unmarshal(data, &m) != nil ||
-		m.Schema != 1 || m.Product != "BMCShell" || m.Platform != "windows-amd64" ||
+		m.Schema != 1 || m.Product != "BMCShell" || m.Platform != windowsAMD64 ||
 		m.Artifact != filepath.Base(archivePath) || !validVersion(m.Version) {
-		return m, errors.New("invalid or mismatched BMCShell release manifest")
+		return m, errors.New("BMCShell 发布清单无效，或与 ZIP 不匹配")
 	}
-	if hash, err := hex.DecodeString(m.SHA256); err != nil || len(hash) != sha256.Size {
-		return m, errors.New("invalid release SHA-256")
+	if !validReleaseDigest(m.SHA256) {
+		return m, errors.New("发布清单中的 SHA-256 无效")
 	}
 	return m, nil
 }
@@ -303,7 +303,7 @@ func unpackVerified(archivePath string, m manifest, stage string) error {
 	defer archive.Close()
 	info, err := archive.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxArchiveBytes {
-		return errors.New("invalid or oversized BMCShell release ZIP")
+		return errors.New("BMCShell 发布 ZIP 无效或超过大小限制")
 	}
 
 	// Hash and unpack the same private snapshot, even if the input is edited
@@ -320,15 +320,15 @@ func unpackVerified(archivePath string, m manifest, stage string) error {
 		return err
 	}
 	if size > maxArchiveBytes || !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), m.SHA256) {
-		return errors.New("BMCShell release ZIP does not match the manifest SHA-256")
+		return errors.New("BMCShell 发布 ZIP 的 SHA-256 与清单不一致")
 	}
 	zipped, err := zip.NewReader(snapshot, size)
 	if err != nil {
-		return fmt.Errorf("read BMCShell release ZIP: %w", err)
+		return fmt.Errorf("读取 BMCShell 发布 ZIP 失败：%w", err)
 	}
 	for _, file := range zipped.File {
 		if file.Name == "BMCShell/"+executableName {
-			return errors.New("legacy core releases require their original installation and an independent BMCSHELL_HOME; use a portable bin-layout release for this update")
+			return errors.New("旧版框架需要原安装目录和独立的 BMCSHELL_HOME。此次更新请使用采用 bin 目录结构的便携版")
 		}
 	}
 	if err := extract(zipped.File, stage, m.Version); err != nil {
@@ -337,16 +337,16 @@ func unpackVerified(archivePath string, m manifest, stage string) error {
 	bin := filepath.Join(stage, binDir)
 	markerPath := filepath.Join(bin, activeRelease)
 	if info, err := os.Lstat(markerPath); err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(m.Version)+1) {
-		return errors.New("release is missing a valid bin/active version marker")
+		return errors.New("发布包缺少有效的 bin/active 版本标记")
 	}
 	if marker, err := os.ReadFile(markerPath); err != nil || string(marker) != m.Version+"\n" {
-		return errors.New("release bin/active marker differs from the manifest version")
+		return errors.New("发布包中 bin/active 标记的版本与清单不一致")
 	}
 	payload := filepath.Join(bin, releasesDir, m.Version)
 	executable := filepath.Join(payload, executableName)
 	if !regularFile(filepath.Join(bin, launcherName)) ||
 		!regularFile(executable) || !regularFile(filepath.Join(payload, filepath.FromSlash(bridgeName))) {
-		return errors.New("release is missing its launcher, executable, or Bash adapter")
+		return errors.New("发布包缺少启动程序、可执行文件或 Bash 适配层")
 	}
 	return verifyExecutable(executable, m.Version)
 }
@@ -354,26 +354,26 @@ func unpackVerified(archivePath string, m manifest, stage string) error {
 func verifyExecutable(executable, version string) error {
 	binary, err := pe.Open(executable)
 	if err != nil {
-		return errors.New("release BMCShell.exe is not a Windows x64 executable")
+		return errors.New("发布包中的 BMCShell.exe 不是 Windows x64 可执行文件")
 	}
 	defer binary.Close()
 	if _, ok := binary.OptionalHeader.(*pe.OptionalHeader64); !ok ||
 		binary.Machine != pe.IMAGE_FILE_MACHINE_AMD64 || binary.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 ||
 		binary.Characteristics&pe.IMAGE_FILE_DLL != 0 {
-		return errors.New("release BMCShell.exe is not a Windows x64 executable")
+		return errors.New("发布包中的 BMCShell.exe 不是 Windows x64 可执行文件")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, executable, "--version").Output()
 	if err != nil || strings.TrimSpace(string(output)) != "BMCShell "+version {
-		return errors.New("release executable did not report the manifest version")
+		return errors.New("发布包中可执行文件报告的版本与清单不一致")
 	}
 	return nil
 }
 
 func extract(files []*zip.File, stage, version string) error {
 	if len(files) == 0 || len(files) > 512 {
-		return errors.New("unexpected number of files in the release ZIP")
+		return errors.New("发布 ZIP 中的文件数量不符合预期")
 	}
 	root, err := os.OpenRoot(stage)
 	if err != nil {
@@ -393,7 +393,7 @@ func extract(files []*zip.File, stage, version string) error {
 		}
 		local, err := filepath.Localize(name)
 		if !ok || err != nil || !validReleaseEntry(name, isDirectory, version) || seen[strings.ToLower(name)] {
-			return fmt.Errorf("invalid or repeated release ZIP entry %q", file.Name)
+			return fmt.Errorf("发布 ZIP 中的条目 %q 无效或重复", file.Name)
 		}
 		seen[strings.ToLower(name)] = true
 		if isDirectory {
@@ -403,7 +403,7 @@ func extract(files []*zip.File, stage, version string) error {
 			continue
 		}
 		if !file.Mode().IsRegular() || file.UncompressedSize64 > remaining {
-			return fmt.Errorf("invalid or oversized release ZIP entry %q", file.Name)
+			return fmt.Errorf("发布 ZIP 中的条目 %q 无效或超过大小限制", file.Name)
 		}
 		if err := root.MkdirAll(filepath.Dir(local), 0700); err != nil {
 			return err
@@ -457,7 +457,7 @@ func writeArchiveFile(root *os.Root, file *zip.File, name string) error {
 	}
 	n, err := io.Copy(output, io.LimitReader(input, int64(file.UncompressedSize64)+1))
 	if err == nil && n != int64(file.UncompressedSize64) {
-		err = errors.New("release ZIP entry size mismatch")
+		err = errors.New("发布 ZIP 条目的大小不一致")
 	}
 	return errors.Join(err, output.Close())
 }
@@ -466,7 +466,7 @@ func activate(bin string, history releaseHistory) error {
 	marker := filepath.Join(bin, activeRelease)
 	if info, err := os.Lstat(marker); err == nil {
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("invalid BMCShell active release marker %q", marker)
+			return fmt.Errorf("BMCShell 当前发布标记 %q 无效", marker)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -491,7 +491,7 @@ func activate(bin string, history releaseHistory) error {
 	// A crash before the marker replacement leaves a mismatched ledger.
 	// Retention refuses to act on that state.
 	if err := saveHistory(bin, history); err != nil {
-		return fmt.Errorf("save core release history: %w", err)
+		return fmt.Errorf("保存框架发布历史失败：%w", err)
 	}
 	return os.Rename(file.Name(), marker)
 }

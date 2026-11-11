@@ -61,9 +61,9 @@ func (a *app) statusEnvironment(ctx session.Context) error {
 			continue
 		}
 		if field.Sensitive {
-			value = "[redacted]"
+			value = "[已隐藏]"
 		} else if field.Validate(value) != nil {
-			return fmt.Errorf("invalid value for %s", name)
+			return fmt.Errorf("环境变量 %s 的值无效", name)
 		}
 		fmt.Fprintf(a.out, "%s = %s\n", name, value)
 	}
@@ -82,38 +82,45 @@ func environmentValuesFrom(t packages.Tool, registry envregistry.Registry, ctx s
 	for _, read := range t.EnvReads {
 		field, registered := registry[read.Name]
 		if !registered {
-			return nil, fmt.Errorf("unregistered environment variable %q", read.Name)
+			return nil, fmt.Errorf("环境变量 %q 尚未登记", read.Name)
 		}
-		value, ok := ctx[field.Key]
-		if field.Sensitive {
-			value, ok = "", false
-		}
-		if source := runtime[read.Name]; source != "" {
-			if runtimeValue := os.Getenv(source); runtimeValue != "" {
-				value, ok = runtimeValue, true
-			}
-		}
-		if !ok && !field.Sensitive {
-			value, ok = defaults[read.Name]
-		}
-		if !ok && !field.Sensitive && field.FrameworkDefault != nil {
-			value, ok = *field.FrameworkDefault, true
-		}
-		if !ok && !field.Sensitive && field.PluginDefault != nil {
-			value, ok = *field.PluginDefault, true
-		}
+		value, ok := environmentValue(field, ctx, defaults, runtime[read.Name])
 		if !ok {
 			if read.Required {
-				return nil, fmt.Errorf("environment variable %s is required", read.Name)
+				return nil, fmt.Errorf("缺少必需的环境变量 %s", read.Name)
 			}
 			continue
 		}
 		if err := field.Validate(value); err != nil {
-			return nil, fmt.Errorf("invalid value for %s", read.Name)
+			return nil, fmt.Errorf("环境变量 %s 的值无效", read.Name)
 		}
 		values[read.Name] = value
 	}
 	return values, nil
+}
+
+func environmentValue(field envregistry.Field, ctx session.Context, defaults map[string]string, source string) (string, bool) {
+	if source != "" {
+		if value := os.Getenv(source); value != "" {
+			return value, true
+		}
+	}
+	if field.Sensitive {
+		return "", false
+	}
+	if value, ok := ctx[field.Key]; ok {
+		return value, true
+	}
+	if value, ok := defaults[field.Name]; ok {
+		return value, true
+	}
+	if field.FrameworkDefault != nil {
+		return *field.FrameworkDefault, true
+	}
+	if field.PluginDefault != nil {
+		return *field.PluginDefault, true
+	}
+	return "", false
 }
 
 func toolEnvironment(registry envregistry.Registry, managed bool) []string {
@@ -146,13 +153,13 @@ func readStringMap(path string, limit int64) (map[string]string, error) {
 	}
 	var raw map[string]json.RawMessage
 	if int64(len(data)) > limit || json.Unmarshal(data, &raw) != nil || raw == nil {
-		return nil, errors.New("expected a JSON object with string values within the size limit")
+		return nil, errors.New("工具写回结果必须是符合大小限制且值为字符串的 JSON 对象")
 	}
 	values := make(map[string]string, len(raw))
 	for key, entry := range raw {
 		var value *string
 		if json.Unmarshal(entry, &value) != nil || value == nil {
-			return nil, errors.New("expected a JSON object with string values")
+			return nil, errors.New("工具写回结果必须是值为字符串的 JSON 对象")
 		}
 		values[key] = *value
 	}
@@ -178,7 +185,7 @@ func applyToolWrites(path, destination string, t packages.Tool, registry envregi
 		}
 		field, registered := registry[name]
 		if !declared || !registered || field.Sensitive || field.Validate(value) != nil {
-			return fmt.Errorf("invalid environment write %q", name)
+			return fmt.Errorf("环境变量 %q 的写回值无效", name)
 		}
 		ctx[field.Key] = value
 	}
@@ -187,7 +194,7 @@ func applyToolWrites(path, destination string, t packages.Tool, registry envregi
 		return err
 	}
 	if len(data) > 8192 {
-		return errors.New("updated session exceeds 8192 bytes")
+		return errors.New("更新后的会话数据超过 8192 字节")
 	}
 	return os.WriteFile(destination, data, 0600)
 }

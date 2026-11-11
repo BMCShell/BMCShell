@@ -29,7 +29,7 @@ func TestDoctorLoadsPluginRepairSuggestions(t *testing.T) {
 	}
 	libraryCLI(t, 0, "", "plugin", "install", "--file", dir)
 	normal := libraryCLI(t, 0, "", "doctor")
-	if !strings.Contains(normal, p.Name+"/"+p.SystemDependencies[0].ID+": missing") ||
+	if !strings.Contains(normal, p.Name+"/"+p.SystemDependencies[0].ID+"：缺失") ||
 		strings.Contains(normal, "Install the test dependency.") {
 		t.Fatalf("unexpected compact diagnostic: %q", normal)
 	}
@@ -92,10 +92,10 @@ func TestDamagedBookCanBeDiagnosedRepairedAndRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out := libraryCLI(t, 0, "", "doctor", "-d"); !strings.Contains(out, home) ||
-		!strings.Contains(out, "Damaged package: "+broken.Name) || !strings.Contains(out, broken.ID) {
+		!strings.Contains(out, "损坏的扩展包："+broken.Name) || !strings.Contains(out, broken.ID) {
 		t.Fatalf("damaged package not diagnosed: %s", out)
 	}
-	if out := libraryCLI(t, 0, "", "plugin", "list"); !strings.Contains(out, intact.Name) || !strings.Contains(out, "damaged") {
+	if out := libraryCLI(t, 0, "", "plugin", "list"); !strings.Contains(out, intact.Name) || !strings.Contains(out, "已损坏") {
 		t.Fatalf("healthy and damaged packages not listed: %s", out)
 	}
 	if out := libraryCLI(t, 0, "", "book", "intact", "-v"); strings.TrimSpace(out) != intact.Version {

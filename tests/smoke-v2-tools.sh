@@ -80,7 +80,7 @@ cat > "$scratch/resolver/bmc-package.json" <<'EOF'
   "provides": {"resolvers": {"sbmc": {"entry": "resolver.exe"}}}
 }
 EOF
-printf '{}\n' > "$scratch/resolver/help.json"
+printf '%s\n' '{"topics":{"resolver.sbmc":{"summary":"Offline resolver fixture help"}}}' > "$scratch/resolver/help.json"
 printf '{}\n' > "$scratch/resolver/changelog.json"
 cat > "$scratch/resolver.go" <<'EOF'
 package main
@@ -91,7 +91,8 @@ import (
 )
 
 func main() {
-	if os.Getenv("BMCSHELL_BRIDGE_RESOLVE_PRIVATE") != "" ||
+	if os.Getenv("BMCSHELL_ENTRY") != "sbmc" ||
+		os.Getenv("BMCSHELL_BRIDGE_RESOLVE_PRIVATE") != "" ||
 		os.Getenv("BMCSHELL_AUTH_PASSWORD") != "" || os.Getenv("BMCSHELL_CONTEXT") != "" {
 		os.Exit(8)
 	}
@@ -120,7 +121,7 @@ done
 [[ $(bmc book oid -v) == "$(bmc book snmp-oid -v)" ]]
 [[ $(bmc book oem_ipmi -v) == "$(bmc book oem-ipmi -v)" ]]
 [[ $(bmc book redfish --id 3.1.1) == *'/redfish/v1/SessionService/Sessions'* ]]
-[[ $(bmc library cidmap) == *'结构版本 2'* ]]
+[[ $(bmc library cidmap) == *'结构版本 4'* ]]
 
 [[ $(bmc tool ipmitool --help) == *'二进制'* ]]
 [[ $(bmc tool snmp3walk --help) == *'示例'* ]]
@@ -130,20 +131,29 @@ bmc use 192.0.2.10 --resolver generic
 [[ $(ipmitool -I lan -vH192.0.2.99 -U operator -P --bin -p 6623 -b 1 chassis status) == 'mock chassis' ]]
 grep -Fqx -- 'ipmi (none) -I open chassis status' "$BMC_TEST_LOG"
 grep -Fqx -- 'ipmi (none) -I lan -vH192.0.2.99 -U operator -P --bin -p 6623 -b 1 -- chassis status' "$BMC_TEST_LOG"
-bmc use 192.0.2.10 --resolver sbmc -- success
+[[ $(bmc tool use@test-tool-resolver --help) == *'Offline resolver fixture help'* ]]
+[[ $(bmc tool use@test-tool-resolver) == *$'use@test-tool-resolver\t解析器\t可用'* ]]
+[[ $(_bmcshell_bridge completion resolvers) == $'generic\ntest-tool-resolver' ]]
+if bmc use 192.0.2.20 --resolver test-tool-resolver@1.0.0 -- success; then exit 1; fi
+bmc use 192.0.2.10 --resolver test-tool-resolver -- success
+[[ $BMCSHELL_CONTEXT == *'"target.resolver":"test-tool-resolver"'* ]]
+bmc setting --set use.default_resolver test-tool-resolver
+[[ $(bmc setting --get use.default_resolver) == test-tool-resolver ]]
+bmc use 192.0.2.10 -- success
+bmc setting --reset use.default_resolver
 [[ $(bmc status) == '192.0.2.10' ]]
-[[ $(bmc status --env) == *'BMCSHELL_AUTH_PASSWORD = [redacted]'* ]]
+[[ $(bmc status --env) == *'BMCSHELL_AUTH_PASSWORD = [已隐藏]'* ]]
 [[ $(bmc status --env) != *test-only* ]]
 [[ $(bmc book oid -s fan) == *1.3.6.1.4.1.54357* ]]
 [[ $(BMCSHELL_SNMP_ENTERPRISES=0 bmc book oid --key 1.3.6.1.4.1.0.1.1.1.1.11.6.1) == *'Fan health Status'* ]]
 [[ $(BMCSHELL_SNMP_ENTERPRISES=0 bmc book oid -s fanHealthAllStatus) == *'1.3.6.1.4.1.0.1.1.1.1.11.6.1'* ]]
-bmc use 192.0.2.10 --resolver sbmc -- enterprise
+bmc use 192.0.2.10 --resolver test-tool-resolver -- enterprise
 [[ $(bmc status --env) == *'BMCSHELL_SNMP_ENTERPRISES = 0'* ]]
 [[ $(bmc book oid -s fanHealthAllStatus) == *'1.3.6.1.4.1.0.1.1.1.1.11.6.1'* ]]
 bmc use 192.0.2.10 --resolver sbmc -- success
-[[ $(_bmcshell_bridge resolve 192.0.2.10 --resolver sbmc -- success) != *test-only* ]]
-if bmc use 192.0.2.20 --resolver sbmc -- partial; then exit 1; fi
-if bmc use 192.0.2.20 --resolver sbmc -- fail; then exit 1; fi
+[[ $(_bmcshell_bridge resolve 192.0.2.10 --resolver test-tool-resolver -- success) != *test-only* ]]
+if bmc use 192.0.2.20 --resolver test-tool-resolver -- partial; then exit 1; fi
+if bmc use 192.0.2.20 --resolver test-tool-resolver -- fail; then exit 1; fi
 [[ $(bmc status) == '192.0.2.10' ]]
 [[ $(ipmitool chassis status 2> "$scratch/ipmi-echo.log") == 'mock chassis' ]]
 [[ $(cat "$scratch/ipmi-echo.log") == '==> ipmitool -I lanplus -U tester -P test-only -H 192.0.2.10 chassis status' ]]
@@ -225,7 +235,7 @@ bmc proxy off >/dev/null
 [[ -z $(_bmcshell_bridge proxy-address ipmi) ]]
 
 setcid C05 --now >/dev/null
-[[ $(bmc status) == 'No active BMC target.' ]]
+[[ $(bmc status) == '尚未选中 BMC 目标。请先运行 bmc use <IP>。' ]]
 [[ -z ${_BMCSHELL_SESSION_STATE[v2.password]-} ]]
 grep -q -- 'bmc reset cold' "$BMC_TEST_LOG"
 if grep -- 'test-only' "$BMC_TEST_LOG" | grep -qv '^ipmi '; then exit 1; fi

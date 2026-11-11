@@ -60,7 +60,7 @@ func legacyLibraryGeneration(root, version string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Size() > 256 {
-		return "", errors.New("invalid legacy Library generation marker")
+		return "", errors.New("旧版业务库的工作库版本标记无效")
 	}
 	data, err := os.ReadFile(marker)
 	if err != nil {
@@ -69,7 +69,7 @@ func legacyLibraryGeneration(root, version string) (string, error) {
 	active := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(active, "gen-") || filepath.Base(active) != active ||
 		strings.ContainsAny(active, "/\\:") {
-		return "", errors.New("invalid legacy Library generation")
+		return "", errors.New("旧版业务库的工作库版本无效")
 	}
 	return filepath.Join(legacyRoot, active), nil
 }
@@ -163,7 +163,7 @@ func (a *app) libraryInfo(p packages.Package) error {
 	}
 	if state.registered != "" {
 		if err := a.recoverLibraryAudit(p, state); err != nil {
-			fmt.Fprintf(a.errOut, "Library 审计待同步：%v\n", err)
+			fmt.Fprintf(a.errOut, "业务库审计记录待同步：%v\n", err)
 		}
 	}
 	snapshot, err := librarydb.ValidateWorking(state.work, p.ID, *p.Library)
@@ -194,7 +194,7 @@ func copyLibrarySnapshot(path string, source io.Reader, limit int64) error {
 		return err
 	}
 	if limit != 0 && size > limit {
-		return errors.New("Library 快照超过 128 MiB")
+		return errors.New("业务库快照超过 128 MiB")
 	}
 	if err := f.Sync(); err != nil {
 		return err
@@ -216,7 +216,7 @@ func copyLibraryFileWithLimit(from, to string, limit int64) error {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("Library 文件不是普通文件: %s", from)
+		return fmt.Errorf("业务库文件不是普通文件：%s", from)
 	}
 	file, err := os.Open(from)
 	if err != nil {
@@ -238,7 +238,7 @@ func (a *app) lockLibrary(id string) (func(), error) {
 	}
 	unlock, err := filelock.Acquire(filepath.Join(root, ".sync.lock"))
 	if err != nil {
-		return nil, fmt.Errorf("无法锁定 Library 同步: %w", err)
+		return nil, fmt.Errorf("无法锁定业务库进行同步：%w", err)
 	}
 	return unlock, nil
 }
@@ -250,7 +250,7 @@ func checkLibraryGeneration(state libraryFiles) error {
 			return err
 		}
 		if generation != state.generation {
-			return errors.New("确认期间 Library 已更新，请重新预览")
+			return errors.New("确认期间业务库已更新，请重新预览")
 		}
 	}
 	fingerprint, err := libraryFingerprint(state)
@@ -258,7 +258,7 @@ func checkLibraryGeneration(state libraryFiles) error {
 		return err
 	}
 	if fingerprint != state.fingerprint {
-		return errors.New("确认期间 Library 文件发生修改，请重新预览")
+		return errors.New("确认期间业务库文件已修改，请重新预览")
 	}
 	return nil
 }
@@ -272,7 +272,7 @@ func libraryFingerprint(state libraryFiles) ([sha256.Size]byte, error) {
 		}
 		for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 			if _, err := os.Lstat(path + suffix); !errors.Is(err, os.ErrNotExist) {
-				return result, errors.New("Library 有 SQLite 附属文件，请先结束本地编辑并保存独立快照")
+				return result, errors.New("业务库存在 SQLite 附属文件，请先结束本地编辑并保存独立快照")
 			}
 		}
 		file, err := os.Open(path)
@@ -285,7 +285,7 @@ func libraryFingerprint(state libraryFiles) ([sha256.Size]byte, error) {
 			return result, err
 		}
 		if n > maxLibrarySnapshot {
-			return result, errors.New("Library 快照超过 128 MiB")
+			return result, errors.New("业务库快照超过 128 MiB")
 		}
 	}
 	hash.Sum(result[:0])

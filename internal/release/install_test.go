@@ -42,13 +42,13 @@ func TestInstallRejectsUnsafeArchiveWithoutChangingActiveRelease(t *testing.T) {
 		valid bool
 		want  string
 	}{
-		{"checksum", "BMCShell/BMCShell.exe", false, "does not match the manifest SHA-256"},
-		{"legacy", "BMCShell/BMCShell.exe", true, "independent BMCSHELL_HOME"},
-		{"traversal", "BMCShell/bin/releases/3.0.0/../outside.txt", true, "invalid or repeated release ZIP entry"},
-		{"device", "BMCShell/bin/releases/3.0.0/doc/NUL.txt", true, "invalid or repeated release ZIP entry"},
-		{"private path", "BMCShell/bin/releases/3.0.0/build/BMCShell.exe", true, "invalid or repeated release ZIP entry"},
-		{"other release", "BMCShell/bin/releases/3.0.1/BMCShell.exe", true, "invalid or repeated release ZIP entry"},
-		{"invalid marker", "BMCShell/bin/active", true, "valid bin/active version marker"},
+		{"checksum", "BMCShell/BMCShell.exe", false, "SHA-256 与清单不一致"},
+		{"legacy", "BMCShell/BMCShell.exe", true, "独立的 BMCSHELL_HOME"},
+		{"traversal", "BMCShell/bin/releases/3.0.0/../outside.txt", true, "发布 ZIP 中的条目"},
+		{"device", "BMCShell/bin/releases/3.0.0/doc/NUL.txt", true, "发布 ZIP 中的条目"},
+		{"private path", "BMCShell/bin/releases/3.0.0/build/BMCShell.exe", true, "发布 ZIP 中的条目"},
+		{"other release", "BMCShell/bin/releases/3.0.1/BMCShell.exe", true, "发布 ZIP 中的条目"},
+		{"invalid marker", "BMCShell/bin/active", true, "缺少有效的 bin/active 版本标记"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -95,7 +95,7 @@ func TestPublishReleaseKeepsInstalledVersionImmutable(t *testing.T) {
 		t.Fatalf("repeat update with identical release: %v", err)
 	}
 	write(source, "different")
-	if err := publishRelease(source, destination); err == nil || !strings.Contains(err.Error(), "different contents") {
+	if err := publishRelease(source, destination); err == nil || !strings.Contains(err.Error(), "已存在且内容不同") {
 		t.Fatalf("update with different contents: %v", err)
 	}
 	content, err := os.ReadFile(filepath.Join(destination, executableName))

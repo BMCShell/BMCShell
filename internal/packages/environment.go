@@ -9,7 +9,7 @@ import (
 	"bmcshell/internal/envregistry"
 )
 
-// Environment loads a complete registry and checks tool contracts before returning it.
+// Environment loads the complete registry and checks tool and resolver contracts.
 func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 	path := filepath.Join(filepath.Dir(s.dir), envregistry.FrameworkFilename)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -44,7 +44,7 @@ func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 		err = registry.AddPlugin(file, p.Publisher)
 		file.Close()
 		if err != nil {
-			return nil, fmt.Errorf("package %s environment registry: %w", p.ID, err)
+			return nil, fmt.Errorf("包 %s 的环境变量登记表：%w", p.ID, err)
 		}
 		for name := range registry {
 			if _, ok := owners[name]; !ok {
@@ -55,7 +55,16 @@ func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 	for _, p := range list {
 		for tool, spec := range p.Provides.Tools {
 			if err := checkToolEnvironment(registry, owners, p, spec); err != nil {
-				return nil, fmt.Errorf("tool %s: %w", tool, err)
+				return nil, fmt.Errorf("工具 %s：%w", tool, err)
+			}
+		}
+		for resolver, spec := range p.Provides.Resolvers {
+			for _, status := range spec.StatusFields {
+				field, ok := registry.ByKey(status.Key)
+				owner := owners[field.Name]
+				if !ok || field.Sensitive || (owner != "" && owner != p.ID) {
+					return nil, fmt.Errorf("解析器 %s 的状态字段 %q 未授权或未登记", resolver, status.Key)
+				}
 			}
 		}
 	}
@@ -66,7 +75,7 @@ func checkToolEnvironment(registry envregistry.Registry, owners map[string]strin
 	reads := make(map[string]bool, len(spec.EnvReads))
 	for _, read := range spec.EnvReads {
 		if _, exists := registry[read.Name]; !exists || reads[read.Name] {
-			return fmt.Errorf("unknown or duplicate environment dependency %q", read.Name)
+			return fmt.Errorf("环境变量依赖 %q 未登记或重复", read.Name)
 		}
 		reads[read.Name] = true
 	}
@@ -74,7 +83,7 @@ func checkToolEnvironment(registry envregistry.Registry, owners map[string]strin
 	for _, write := range spec.EnvWrites {
 		field, exists := registry[write.Name]
 		if !exists || owners[write.Name] != p.ID || field.Sensitive || writes[write.Name] {
-			return fmt.Errorf("unauthorized or duplicate environment write %q", write.Name)
+			return fmt.Errorf("环境变量写入项 %q 未授权或重复", write.Name)
 		}
 		writes[write.Name] = true
 	}

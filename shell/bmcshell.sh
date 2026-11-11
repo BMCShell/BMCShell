@@ -1,16 +1,16 @@
 # Source this file from Bash to keep BMC session state in the current terminal.
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    printf 'Load BMCShell with: source %q\n' "${BASH_SOURCE[0]}" >&2
+    printf '请在当前 Bash 中加载 BMCShell：source %q\n' "${BASH_SOURCE[0]}" >&2
     exit 2
 fi
 if (( BASH_VERSINFO[0] < 4 )); then
-    printf 'BMCShell requires Bash 4 or newer.\n' >&2
+    printf 'BMCShell 需要 Bash 4 或更新版本。\n' >&2
     return 2
 fi
 if [[ ${_BMCSHELL_LOADED-} != 1 ]] &&
     { builtin declare -F bmc >/dev/null || builtin alias bmc >/dev/null 2>&1; }; then
-    printf 'BMCShell: bmc is already defined in this terminal. Open a new terminal to load BMCShell.\n' >&2
+    printf '当前终端已定义 bmc。请打开新终端再加载 BMCShell。\n' >&2
     return 2
 fi
 
@@ -22,12 +22,12 @@ _bmcshell_release_bridge() {
     [[ -f $root/.active-release ]] || return 0
     if ! IFS= read -r release < "$root/.active-release" ||
         [[ ! $release =~ ^release-[0-9]+$ ]]; then
-        printf 'BMCShell: invalid active release marker.\n' >&2
+        printf 'BMCShell 活动版本标记无效。\n' >&2
         return 2
     fi
     bridge=$root/.releases/$release/shell/bmcshell.sh
     if [[ ! -f $bridge ]]; then
-        printf 'BMCShell: active release adapter not found.\n' >&2
+        printf '找不到 BMCShell 活动版本的 Bash 适配脚本。\n' >&2
         return 2
     fi
     builtin printf '%s\n' "$bridge"
@@ -52,7 +52,7 @@ _bmcshell_executable() {
     fi
     [[ $path == */* ]] || path=./$path
     if [[ ! -f $path || ! -x $path ]]; then
-        printf 'BMCShell executable not found: %s\n' "$path" >&2
+        printf '找不到 BMCShell 程序文件：%s\n' "$path" >&2
         return 2
     fi
     directory=$(builtin cd -P -- "${path%/*}" && builtin pwd -P) || return
@@ -108,7 +108,7 @@ _bmcshell_tools() {
         [[ -n $name ]] || continue
         if [[ ! $name =~ ^[a-z][a-z0-9_-]*$ || $name == bmc ||
             $'\n'$reserved$'\n' == *$'\n'"$name"$'\n'* ]]; then
-            printf 'BMCShell: invalid or reserved tool name: %q\n' "$name" >&2
+            printf 'BMCShell 工具名无效或已保留：%q\n' "$name" >&2
             return 2
         fi
         [[ ! ${seen[$name]+set} ]] || continue
@@ -146,14 +146,14 @@ _bmcshell_run_tool_bridge() (
 _bmcshell_run_tool() {
     local candidate
     if [[ $- == *x* || $- == *a* || -o functrace || -n $(builtin trap -p DEBUG) ]]; then
-        printf 'BMCShell: disable tracing and automatic export before running tools.\n' >&2
+        printf '运行 BMCShell 工具前，请关闭 Bash 跟踪和自动导出。\n' >&2
         return 2
     fi
     { candidate=$(_bmcshell_run_tool_bridge "$@" 3>&4 4>&-); } 4>&1 || return
     candidate=${candidate%$'\r'}
     [[ -n $candidate ]] || return 0
     if [[ $candidate != \{*\} || $candidate == *$'\n'* ]]; then
-        printf 'BMCShell: invalid tool session update.\n' >&2
+        printf 'BMCShell 工具返回的会话更新无效。\n' >&2
         return 2
     fi
     _bmcshell_check_context || return
@@ -172,14 +172,14 @@ _bmcshell_dispatch_tool() {
         return
     fi
     if [[ $- == *x* || $- == *a* || ( $- == *T* && -n $(builtin trap -p DEBUG) ) ]]; then
-        printf 'BMCShell: disable tracing and automatic export before using Bash tools.\n' >&2
+        printf '运行 BMCShell 的 Bash 工具前，请关闭 Bash 跟踪和自动导出。\n' >&2
         return 2
     fi
     if command -v cygpath >/dev/null; then
         _bmcshell_tool_entry=$(command cygpath -u -- "$_bmcshell_tool_entry") || return
     fi
     if [[ $_bmcshell_tool_entry != /* || ! -f $_bmcshell_tool_entry ]]; then
-        printf 'BMCShell: invalid Bash tool entry.\n' >&2
+        printf 'BMCShell 工具的 Bash 入口无效。\n' >&2
         return 2
     fi
     # V2 same-shell entries query the target through the old bridge spelling.
@@ -195,7 +195,7 @@ _bmcshell_refresh_globals() {
         [[ -n $name ]] || continue
         if builtin type -t "$name" >/dev/null; then
             if [[ " ${_BMCSHELL_GLOBAL_TOOLS[*]} " != *" $name "* ]]; then
-                printf 'BMCShell: global tool %s is already defined.\n' "$name" >&2
+                printf 'BMCShell 全局工具 %s 已定义。\n' "$name" >&2
             fi
             continue
         fi
@@ -216,7 +216,7 @@ _bmcshell_check_tool_functions() {
     done <<< "$declarations"
     for name in "$@"; do
         if [[ ${locked[$name]+set} ]]; then
-            printf 'BMCShell: tool function %s is read-only.\n' "$name" >&2
+            printf 'BMCShell 工具函数 %s 为只读。\n' "$name" >&2
             return 2
         fi
     done
@@ -286,26 +286,32 @@ _bmcshell_check_context() {
     local declaration
     declaration=$(builtin declare -p BMCSHELL_CONTEXT 2>/dev/null) || declaration=''
     if [[ $declaration =~ ^declare\ -[^[:space:]]*r ]]; then
-        printf 'BMCShell: BMCSHELL_CONTEXT is read-only.\n' >&2
+        printf 'BMCSHELL_CONTEXT 为只读，无法更新 BMC 会话。\n' >&2
         return 2
     fi
 }
 
 _bmcshell_use() {
-    local response candidate credentials username password
+    local response candidate credentials username password bash_path=''
     if [[ $# == 1 && ( $1 == -h || $1 == --help ) ]]; then
         _bmcshell_call help use
         return
     fi
     if [[ $- == *x* || $- == *a* || -o functrace || -n $(builtin trap -p DEBUG) ]]; then
-        printf 'BMCShell: disable tracing and automatic export before selecting a target.\n' >&2
+        printf '选择 BMC 目标前，请关闭 Bash 跟踪和自动导出。\n' >&2
         return 2
     fi
     _bmcshell_check_context || return
-    response=$(BMCSHELL_BRIDGE_RESOLVE_PRIVATE=1 _bmcshell_bridge resolve "$@") || return
+    if [[ -t 0 ]]; then
+        bash_path=$BASH
+        if command -v cygpath >/dev/null; then
+            bash_path=$(command cygpath -aw -- "$bash_path") || bash_path=''
+        fi
+    fi
+    response=$(BMCSHELL_BRIDGE_BASH="$bash_path" BMCSHELL_BRIDGE_RESOLVE_PRIVATE=1 _bmcshell_bridge resolve "$@") || return
     candidate=${response%%$'\n'*}
     if [[ $candidate != \{*\} ]]; then
-        printf 'BMCShell: invalid resolver response.\n' >&2
+        printf 'BMC 解析器返回的会话信息无效。\n' >&2
         return 2
     fi
     if [[ $response == *$'\n'* ]]; then
@@ -313,7 +319,7 @@ _bmcshell_use() {
         username=${credentials%%$'\n'*}
         password=${credentials#*$'\n'}
         if [[ $credentials != *$'\n'* || -z $username || -z $password || $password == *$'\n'* ]]; then
-            printf 'BMCShell: invalid private resolver response.\n' >&2
+            printf 'BMC 解析器返回的凭据信息格式无效。\n' >&2
             return 2
         fi
     fi
@@ -328,6 +334,7 @@ _bmcshell_use() {
     BMCSHELL_CONTEXT=$candidate
     builtin export -n BMCSHELL_CONTEXT
     _bmcshell_render_prompt || :
+    builtin printf '已选择 BMC 目标 %s。\n' "$1" >&2 || :
 }
 
 _bmcshell_exit() {
@@ -336,11 +343,11 @@ _bmcshell_exit() {
             _bmcshell_call help exit
             return
         fi
-        printf 'Usage: bmc exit\n' >&2
+        printf 'bmc exit 不接受额外参数。请运行 bmc exit --help 查看用法。\n' >&2
         return 2
     fi
     if [[ -z ${BMCSHELL_CONTEXT-} ]]; then
-        printf 'No active BMC target.\n'
+        printf '当前没有可退出的 BMC 会话。\n'
         return 0
     fi
     _bmcshell_check_context || return
@@ -356,7 +363,7 @@ _bmcshell_check_proxy_environment() {
         declaration=$(builtin declare -p "$name" 2>/dev/null) || continue
         case $declaration in
             'declare -- '*|'declare -x '*) ;;
-            *) printf 'BMCShell: cannot manage proxy variable %s with its current Bash attributes.\n' "$name" >&2
+            *) printf '代理变量 %s 的 Bash 属性不受支持，无法更新。\n' "$name" >&2
                return 2 ;;
         esac
     done
@@ -422,16 +429,21 @@ _bmcshell_proxy() {
     if [[ -z $address ]]; then
         printf 'BMC 全局代理：关闭（已配置 %s）\n' "${state#*|}"
     else
-        printf 'BMC SOCKS5：%s\n' "$address"
+        printf 'BMC 全局代理：开启（SOCKS5 %s）\n' "$address"
     fi
 }
 
 _bmcshell_public_command() {
     if command -v cygpath >/dev/null; then
-        if [[ $# == 4 && $1 == plugin && $2 == install && $3 == --file ]]; then
+        if [[ $# -ge 4 && $1 == plugin && $2 == install && $3 == --file ]]; then
             local path
-            path=$(command cygpath -aw -- "$4") || return
-            _bmcshell_call "$1" "$2" "$3" "$path"
+            local -a paths=()
+            shift 3
+            for path in "$@"; do
+                path=$(command cygpath -aw -- "$path") || return
+                paths+=("$path")
+            done
+            _bmcshell_call plugin install --file "${paths[@]}"
             return
         fi
         if [[ $# == 3 && $1 == update && $2 == --file ]]; then
@@ -455,7 +467,7 @@ _bmcshell_complete() {
         words='-h --help'
         case $command in
             help) words=$commands ;;
-            doctor) words+=' -d --detial -f --filter -a --auto' ;;
+            doctor) words+=' -d --detail --detial -f --filter -a --auto' ;;
             tool)
                 if (( COMP_CWORD == 2 )); then
                     words+=' -l --list -a --all'
@@ -474,6 +486,17 @@ _bmcshell_complete() {
             plugin)
                 if (( COMP_CWORD == 2 )); then
                     words+=' list update search install upgrade remove'
+                elif [[ ${COMP_WORDS[2]} == list ]]; then
+                    local installed_options=' -i --installed' detail_options=' -d --detail --detial'
+                    local plugin_types=' book library theme tool bundle' index
+                    for (( index = 3; index < COMP_CWORD; index++ )); do
+                        case ${COMP_WORDS[index]} in
+                            -i|--installed) installed_options= ;;
+                            -d|--detial|--detail) detail_options= ;;
+                            book|library|theme|tool|bundle) plugin_types= ;;
+                        esac
+                    done
+                    words+="$installed_options$detail_options$plugin_types"
                 elif [[ $previous == install ]]; then
                     words+=' --file'
                 fi
@@ -558,7 +581,7 @@ function bmc {
                 shift
                 _bmcshell_bridge "$@"
             else
-                printf 'BMCShell: unknown command bridge; see bmc help.\n' >&2
+                printf '命令 bridge 为 BMCShell 内部接口。请运行 bmc help 查看可用命令。\n' >&2
                 return 2
             fi
             ;;

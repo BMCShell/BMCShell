@@ -106,7 +106,7 @@ func TestUnsafeZIPLeavesNoInstalledPackage(t *testing.T) {
 			}
 			files := fixturePackage(t, bookID, "book", "Fixture Book")
 			files[path] = []byte("unsafe")
-			if _, err := s.Install(writeFixtureZIP(t, files)); err == nil || !strings.Contains(err.Error(), "unsafe package path") {
+			if _, err := s.Install(writeFixtureZIP(t, files)); err == nil || !strings.Contains(err.Error(), "不符合路径要求") {
 				t.Fatalf("unsafe path %q: %v", path, err)
 			}
 			if installed, err := s.List(); err != nil || len(installed) != 0 {

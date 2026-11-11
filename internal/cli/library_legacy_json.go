@@ -1,9 +1,8 @@
 package cli
 
 import (
-	"errors"
+	"fmt"
 	"path/filepath"
-	"slices"
 
 	"bmcshell/internal/librarydb"
 	"bmcshell/internal/packages"
@@ -13,9 +12,10 @@ import (
 // older record is retained and a differing new value requires a conflict choice.
 func stageLegacyJSONLibrary(old, next packages.Package, incoming, work, baseline string) error {
 	tables := next.Library.Tables
-	if len(tables) != 1 || tables[0].Name != "records" || !slices.Equal(tables[0].Keys, []string{"key"}) ||
-		next.Library.Lookup != (librarydb.Lookup{Table: "records", Value: "value"}) {
-		return errors.New("旧版 JSON Library 只能迁移到 records 表的 key/value 查询库")
+	lookup := next.Library.Lookup
+	if len(tables) != 1 || len(tables[0].Keys) != 1 || lookup.Table != tables[0].Name ||
+		lookup.Value == "" || lookup.Value == tables[0].Keys[0] {
+		return fmt.Errorf("迁移旧版 JSON 业务库需要一张业务表、一个稳定键和单独的 lookup 值列")
 	}
 	var entries []librarydb.LegacyKeyValue
 	if err := readPackageJSON(old, old.Data, &entries); err != nil {
@@ -29,8 +29,8 @@ func stageLegacyJSONLibrary(old, next packages.Package, incoming, work, baseline
 		if path == baseline {
 			records = nil
 		}
-		if err := librarydb.ImportLegacyKeyValues(path, records); err != nil {
-			return errors.New("迁移 " + filepath.Base(path) + "：" + err.Error())
+		if err := librarydb.ImportLegacyKeyValues(path, tables[0], lookup.Value, records); err != nil {
+			return fmt.Errorf("迁移 %s：%w", filepath.Base(path), err)
 		}
 	}
 	return nil

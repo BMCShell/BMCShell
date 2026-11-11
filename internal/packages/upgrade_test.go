@@ -28,7 +28,7 @@ func TestLibraryPackageSetUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.PrepareUpgrade([]string{newLibrary}); err == nil || !strings.Contains(err.Error(), "requires Library") {
+	if _, err := s.PrepareUpgrade([]string{newLibrary}); err == nil || !strings.Contains(err.Error(), "结构版本为 1 到 1，实际为 2") {
 		t.Fatalf("upgrade without compatible tool = %v", err)
 	}
 	plan, err := s.PrepareUpgrade([]string{newLibrary, newTool})

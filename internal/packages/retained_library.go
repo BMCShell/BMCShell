@@ -10,14 +10,14 @@ import (
 type AmbiguousRetainedLibraryError struct{ ID string }
 
 func (e *AmbiguousRetainedLibraryError) Error() string {
-	return fmt.Sprintf("Library %s has several retained versions and no recorded last release; reinstall the last version used before changing versions", e.ID)
+	return fmt.Sprintf("业务库 %s 保留了多个版本，且缺少最后使用版本的记录。请先重新安装上次使用的版本", e.ID)
 }
 
 // RetainedLibrary returns the last active release, including a removed package.
 // If its release files are damaged, it returns the known identity and an error.
 func (s *Store) RetainedLibrary(id string) (Package, error) {
 	if !packageID.MatchString(id) {
-		return Package{}, fmt.Errorf("invalid Library ID %q", id)
+		return Package{}, fmt.Errorf("业务库 ID %q 无效", id)
 	}
 	entries, _, err := s.registeredPackages()
 	if err != nil {

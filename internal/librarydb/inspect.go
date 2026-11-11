@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -78,7 +79,7 @@ func inspectFile(path, id string, immutable bool) (Snapshot, error) {
 			return Snapshot{}, err
 		}
 		if exists {
-			return Snapshot{}, errors.New("Library release database contains working audit state")
+			return Snapshot{}, errors.New("业务库发布数据库含有本地工作库的审计状态")
 		}
 	}
 	return inspect(tx, id)
@@ -87,10 +88,10 @@ func inspectFile(path, id string, immutable bool) (Snapshot, error) {
 func quickCheck(tx *sql.Tx) error {
 	var check string
 	if err := tx.QueryRow("PRAGMA quick_check(1)").Scan(&check); err != nil {
-		return fmt.Errorf("SQLite quick check: %w", err)
+		return fmt.Errorf("SQLite 快速检查失败：%w", err)
 	}
 	if check != "ok" {
-		return errors.New("Library database failed the SQLite quick check")
+		return errors.New("业务库数据库未通过 SQLite 快速检查")
 	}
 	return nil
 }
@@ -113,7 +114,7 @@ func inspect(tx *sql.Tx, id string) (Snapshot, error) {
 	snapshot.Tables = make(map[string]TableSchema, len(tables))
 	for _, table := range tables {
 		if err := inspectTable(tx, &table); err != nil {
-			return Snapshot{}, fmt.Errorf("Library table %q: %w", table.Name, err)
+			return Snapshot{}, fmt.Errorf("业务库表 %q：%w", table.Name, err)
 		}
 		snapshot.Tables[table.Name] = table
 	}
@@ -123,7 +124,7 @@ func inspect(tx *sql.Tx, id string) (Snapshot, error) {
 func readIdentity(tx *sql.Tx, id string) (Snapshot, error) {
 	var kind string
 	if err := tx.QueryRow(`SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = ?`, metadataTable).Scan(&kind); err != nil || kind != "table" {
-		return Snapshot{}, fmt.Errorf("Library metadata %q must be an ordinary table", metadataTable)
+		return Snapshot{}, fmt.Errorf("业务库元数据 %q 须为普通数据表", metadataTable)
 	}
 	entries, err := queryRows(tx, func(rows *sql.Rows) (Snapshot, error) {
 		var meta Snapshot
@@ -131,18 +132,18 @@ func readIdentity(tx *sql.Tx, id string) (Snapshot, error) {
 		return meta, err
 	}, `SELECT id, schema_version, data_version FROM main._bmcshell_library LIMIT 2`)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("Library metadata: %w", err)
+		return Snapshot{}, fmt.Errorf("无法读取业务库元数据：%w", err)
 	}
 	if len(entries) != 1 || !libraryID.MatchString(entries[0].ID) || entries[0].ID != id ||
 		!validIdentifier(entries[0].DataVersion) || len(entries[0].DataVersion) > 128 {
-		return Snapshot{}, errors.New("Library metadata must contain one row with matching package ID and a valid dataVersion")
+		return Snapshot{}, errors.New("业务库元数据须恰好有一条记录，包含匹配的包 ID 和有效的 dataVersion")
 	}
 	var version int
 	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return Snapshot{}, err
 	}
 	if version < 1 || version != entries[0].SchemaVersion {
-		return Snapshot{}, errors.New("Library schemaVersion must match SQLite user_version")
+		return Snapshot{}, errors.New("业务库的 schemaVersion 须与 SQLite 的 user_version 一致")
 	}
 	return entries[0], nil
 }
@@ -190,11 +191,11 @@ func inspectTable(tx *sql.Tx, table *TableSchema) error {
 // Validate checks that a release template has the declared identity, version, tables and keys.
 func Validate(path, id string, contract Contract) (Snapshot, error) {
 	if !strings.HasSuffix(strings.ToLower(path), ".library.db") {
-		return Snapshot{}, errors.New("Library data file must end in .library.db")
+		return Snapshot{}, errors.New("业务库数据文件须以 .library.db 结尾")
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if _, err := os.Lstat(path + suffix); err == nil {
-			return Snapshot{}, fmt.Errorf("Library release database must be standalone (found %s sidecar)", suffix)
+			return Snapshot{}, fmt.Errorf("业务库发布数据库须为独立文件，发现附属文件 %s", suffix)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Snapshot{}, err
 		}
@@ -220,25 +221,35 @@ func ValidateSnapshot(snapshot Snapshot, contract Contract) error {
 		return err
 	}
 	if snapshot.SchemaVersion != contract.SchemaVersion {
-		return fmt.Errorf("Library schema version %d does not match required version %d", snapshot.SchemaVersion, contract.SchemaVersion)
+		return fmt.Errorf("业务库结构版本 %d 与所需版本 %d 不一致", snapshot.SchemaVersion, contract.SchemaVersion)
 	}
 	for _, declared := range contract.Tables {
 		table, exists := snapshot.Tables[declared.Name]
 		if !exists {
-			return fmt.Errorf("Library table %q is missing or is not an ordinary table", declared.Name)
+			return fmt.Errorf("业务库表 %q 不存在或不是普通数据表", declared.Name)
 		}
 		for _, field := range declared.SensitiveFields {
 			if _, ok := columnNamed(table, field); !ok {
-				return fmt.Errorf("Library sensitive field %q is missing from table %q", field, table.Name)
+				return fmt.Errorf("业务库敏感字段 %q 在表 %q 中不存在", field, table.Name)
+			}
+		}
+		for _, field := range declared.ViewColumns {
+			if column, ok := columnNamed(table, field); !ok || column.Hidden == 1 {
+				return fmt.Errorf("业务库显示列 %q 在表 %q 中不存在", field, table.Name)
+			}
+		}
+		for _, field := range slices.Sorted(maps.Keys(declared.Fields)) {
+			if column, ok := columnNamed(table, field); !ok || column.Hidden == 1 {
+				return fmt.Errorf("业务库字段 %q 在表 %q 中不存在", field, table.Name)
 			}
 		}
 		if !stableKey(table, declared.Keys) {
-			return fmt.Errorf("Library table %q requires a non-null primary key or binary unique key on %s", declared.Name, strings.Join(declared.Keys, ", "))
+			return fmt.Errorf("业务库表 %q 的 %s 须为非空主键或使用二进制排序规则的唯一键", declared.Name, strings.Join(declared.Keys, ", "))
 		}
 	}
 	if contract.Lookup != (Lookup{}) {
 		if _, ok := columnNamed(snapshot.Tables[contract.Lookup.Table], contract.Lookup.Value); !ok {
-			return fmt.Errorf("Library lookup column %q is missing from table %q", contract.Lookup.Value, contract.Lookup.Table)
+			return fmt.Errorf("业务库查询列 %q 在表 %q 中不存在", contract.Lookup.Value, contract.Lookup.Table)
 		}
 	}
 	return nil

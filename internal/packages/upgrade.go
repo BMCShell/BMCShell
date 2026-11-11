@@ -69,14 +69,14 @@ func (u *Upgrade) ChangedPackages() []Package {
 // SetSources binds changed packages to their verified catalog sources.
 func (u *Upgrade) SetSources(sources map[string]string) error {
 	if u.stage == "" {
-		return errors.New("no prepared package set")
+		return errors.New("没有已准备的包集合")
 	}
 	for id, source := range sources {
 		if u.skipped[id] != nil {
 			continue
 		}
 		if !u.changed[id] || !originName.MatchString(source) {
-			return fmt.Errorf("invalid source binding for package %s", id)
+			return fmt.Errorf("包 %s 的软件源绑定无效", id)
 		}
 	}
 	for i, p := range u.after {
@@ -111,7 +111,7 @@ func (s *Store) setPath(name string) string {
 
 func (s *Store) checkSetDirectory(name string) error {
 	if !setName.MatchString(name) {
-		return fmt.Errorf("invalid package-set name %q", name)
+		return fmt.Errorf("包集合名称 %q 无效", name)
 	}
 	for _, dir := range []string{filepath.Join(s.dir, ".sets"), s.setPath(name)} {
 		info, err := os.Lstat(dir)
@@ -119,7 +119,7 @@ func (s *Store) checkSetDirectory(name string) error {
 			return err
 		}
 		if !info.IsDir() {
-			return fmt.Errorf("invalid package-set directory %q", dir)
+			return fmt.Errorf("包集合目录 %q 无效", dir)
 		}
 	}
 	return nil
@@ -137,7 +137,7 @@ func (s *Store) PrepareChanges(sources []string, expected []Package) (*Upgrade, 
 
 func (s *Store) prepareChanges(sources []string, expected []Package, general bool) (*Upgrade, error) {
 	if len(sources) == 0 {
-		return nil, errors.New("package change needs at least one package file")
+		return nil, errors.New("包变更需要至少一个包文件")
 	}
 	unlock, err := s.lock()
 	if err != nil {
@@ -159,7 +159,7 @@ func (s *Store) prepareChanges(sources []string, expected []Package, general boo
 		available = availablePackages(before)
 	}
 	if general && !reflect.DeepEqual(available, expected) {
-		return nil, errors.New("installed packages changed; resolve the catalog plan again")
+		return nil, errors.New("已安装的包发生变更，请重新生成软件源操作方案")
 	}
 	digest, err := packageSetDigest(before)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Store) populateUpgrade(u *Upgrade, sources []string) error {
 		}
 		p, err := s.stagePackage(source, root)
 		if err != nil {
-			return fmt.Errorf("upgrade package %q: %w", source, err)
+			return fmt.Errorf("无法准备包 %q 的变更：%w", source, err)
 		}
 		old, exists := installed[p.ID]
 		repair, err := repairSelectedRelease(p, u.damaged)
@@ -208,7 +208,7 @@ func (s *Store) populateUpgrade(u *Upgrade, sources []string) error {
 			}
 		}
 		if !exists && !u.general {
-			return fmt.Errorf("package %s is not installed", p.ID)
+			return fmt.Errorf("包 %s 尚未安装", p.ID)
 		}
 		if u.general && exists && !u.changed[p.ID] && p.Type == "library" && old.Type == "library" && p.Version == old.Version {
 			old.Source = ""
@@ -221,12 +221,12 @@ func (s *Store) populateUpgrade(u *Upgrade, sources []string) error {
 				return err
 			}
 			if previous != incoming {
-				return fmt.Errorf("Library %s %s has different contents; publish a new version", p.Name, p.Version)
+				return fmt.Errorf("业务库 %s %s 的内容有变更，请发布新版本", p.Name, p.Version)
 			}
 			continue
 		}
 		if u.changed[p.ID] || u.skipped[p.ID] != nil || exists && (CanonicalType(p.Type) != CanonicalType(old.Type) || p.Version == old.Version) {
-			return fmt.Errorf("changed package %s must appear once, preserve its type, and change its installed version", p.ID)
+			return fmt.Errorf("变更包 %s 须仅出现一次，保持包类型并更改已安装版本", p.ID)
 		}
 		if u.general && exists && p.Type == "library" {
 			if err := checkLibraryUpdate(old, p); err != nil {
@@ -312,13 +312,13 @@ func (s *Store) checkSet(list []Package) error {
 // CommitUpgrade retains the previous selection and its checkpoint for rollback.
 func (s *Store) CommitUpgrade(u *Upgrade, groupID, checkpoint string, beforeCommit func() error) error {
 	if u == nil || u.general || !u.changed[groupID] {
-		return errors.New("upgrade must belong to this store and include the selected Library")
+		return errors.New("升级方案须属于当前包存储目录并包含选中的业务库")
 	}
 	if len(checkpoint) > 256 {
-		return errors.New("Library rollback checkpoint exceeds 256 bytes")
+		return errors.New("业务库回滚检查点超过 256 字节")
 	}
 	if p, err := findPackage(u.after, groupID); err != nil || p.Library == nil {
-		return errors.New("upgrade group must be a SQLite Library package")
+		return errors.New("升级方案须包含 SQLite 业务库包")
 	}
 	return s.commitPrepared(u, groupID, checkpoint, nil, beforeCommit)
 }
@@ -331,14 +331,14 @@ func (s *Store) CommitChanges(u *Upgrade, beforeCommit func() error) error {
 // generations in one metadata transaction.
 func (s *Store) CommitChangesWithLibraries(u *Upgrade, activations []LibraryActivation, beforeCommit func() error) error {
 	if u == nil || !u.general {
-		return errors.New("expected a prepared catalog package change")
+		return errors.New("需要已准备的软件源包变更方案")
 	}
 	return s.commitPrepared(u, "", "", activations, beforeCommit)
 }
 
 func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, activations []LibraryActivation, beforeCommit func() error) error {
 	if u.storeDir != s.dir || u.stage == "" {
-		return errors.New("prepared package set does not belong to this store")
+		return errors.New("已准备的包集合不属于当前包存储目录")
 	}
 	unlock, err := s.lock()
 	if err != nil {
@@ -350,7 +350,7 @@ func (s *Store) commitPrepared(u *Upgrade, groupID, checkpoint string, activatio
 		return err
 	}
 	if !sameDamagedSelections(damaged, u.damaged) {
-		return errors.New("damaged package selections changed; prepare the package change again")
+		return errors.New("选中的损坏包已变更，请重新准备包变更")
 	}
 	if err := verifyPackageDigest(current, u.beforeDigest); err != nil {
 		return err
@@ -409,7 +409,7 @@ func (s *Store) RollbackUpgrade(groupID string, beforeCommit func(previous Packa
 		return err
 	}
 	if rollback == nil || rollback.Group != groupID {
-		return fmt.Errorf("no current package rollback belongs to Library %s", groupID)
+		return fmt.Errorf("当前没有业务库 %s 对应的包回滚记录", groupID)
 	}
 	current, err := s.List()
 	if err != nil {
@@ -434,7 +434,7 @@ func (s *Store) rollbackLegacy(groupID string, beforeCommit func(previous Packag
 		return err
 	}
 	if set.Previous == nil || set.Group != groupID {
-		return fmt.Errorf("no current package rollback belongs to Library %s", groupID)
+		return fmt.Errorf("当前没有业务库 %s 对应的包回滚记录", groupID)
 	}
 	if *set.Previous != "" {
 		if err := s.checkSetDirectory(*set.Previous); err != nil {
@@ -462,7 +462,7 @@ func (s *Store) commitRollback(previous []Package, groupID, checkpoint string, b
 	if beforeCommit != nil {
 		p, err := findPackage(previous, groupID)
 		if err != nil || p.ID != groupID {
-			return fmt.Errorf("previous package set does not contain Library %s", groupID)
+			return fmt.Errorf("上一个包集合中没有业务库 %s", groupID)
 		}
 		if err := beforeCommit(p, checkpoint); err != nil {
 			return err
@@ -488,7 +488,7 @@ func verifyPackageDigest(list []Package, expected string) error {
 		return err
 	}
 	if digest != expected {
-		return errors.New("package-set contents changed; prepare the upgrade again")
+		return errors.New("包集合的内容发生变更，请重新准备升级")
 	}
 	return nil
 }
@@ -511,7 +511,7 @@ func packageSetDigest(list []Package) (string, error) {
 			}
 			entries++
 			if entries > maxPackageFiles {
-				return fmt.Errorf("package %s exceeds %d entries", p.ID, maxPackageFiles)
+				return fmt.Errorf("包 %s 的条目数超过 %d", p.ID, maxPackageFiles)
 			}
 			rel, err := filepath.Rel(p.Root, path)
 			if err != nil {
@@ -526,7 +526,7 @@ func packageSetDigest(list []Package) (string, error) {
 				return nil
 			}
 			if !info.Mode().IsRegular() || info.Size() > maxPackageBytes-bytes {
-				return fmt.Errorf("cannot snapshot package file %q", path)
+				return fmt.Errorf("无法为包文件 %q 创建快照", path)
 			}
 			f, err := os.Open(path)
 			if err != nil {
@@ -535,7 +535,7 @@ func packageSetDigest(list []Package) (string, error) {
 			defer f.Close()
 			size, err := io.Copy(hash, io.LimitReader(f, info.Size()+1))
 			if size != info.Size() && err == nil {
-				return fmt.Errorf("package file %q changed while reading", path)
+				return fmt.Errorf("包文件 %q 在读取期间发生变更", path)
 			}
 			bytes += size
 			return err

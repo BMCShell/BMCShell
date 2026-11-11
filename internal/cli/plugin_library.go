@@ -39,16 +39,20 @@ type libraryAuditChange struct {
 	Selected string `json:"selected"`
 }
 
-func (a *app) installLocalPackage(path string, input *bufio.Reader, interactive bool) error {
+func (a *app) installLocalPackages(paths []string, input *bufio.Reader, interactive bool) error {
 	installed, err := a.store.List()
 	if err != nil {
 		return err
 	}
-	plan, err := a.store.PrepareChanges([]string{path}, installed)
+	plan, err := a.store.PrepareChanges(paths, installed)
 	if err != nil {
 		return err
 	}
 	defer plan.Close()
+	// Upgrade plans can skip an incompatible Library. An install must apply the whole batch.
+	if err := errors.Join(plan.SkippedLibraryUpdates()...); err != nil {
+		return err
+	}
 
 	changed := plan.ChangedPackages()
 	if len(changed) == 0 {
@@ -58,8 +62,9 @@ func (a *app) installLocalPackage(path string, input *bufio.Reader, interactive 
 	if err := a.commitCatalogPlan(plan, input, interactive); err != nil {
 		return err
 	}
-	p := changed[0]
-	fmt.Fprintf(a.out, "Installed %s %s\n", p.Name, p.Version)
+	for _, p := range changed {
+		fmt.Fprintf(a.out, "已安装 %s %s\n", p.Name, p.Version)
+	}
 	return nil
 }
 
@@ -227,7 +232,7 @@ func (a *app) stageCatalogLibrary(old, next packages.Package, input *bufio.Reade
 			return state, err
 		}
 		entry.Action = "upgrade"
-		fmt.Fprintf(a.out, "Library %s %s → %s\n", next.Name, old.Version, next.Version)
+		fmt.Fprintf(a.out, "业务库 %s %s → %s\n", next.Name, old.Version, next.Version)
 		entry.Changes = a.reviewLibraryMerge(&plan, input, interactive, contracts...)
 		if err := plan.Apply(work, target.DataVersion); err != nil {
 			return state, err

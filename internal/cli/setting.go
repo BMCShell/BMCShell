@@ -36,11 +36,11 @@ func (a *app) setting(args []string) error {
 		if err := catalog.Open(a.home).ResetSources(); err != nil {
 			return err
 		}
-		fmt.Fprintln(a.out, "Framework and plugin settings reset.")
+		fmt.Fprintln(a.out, "已恢复框架与扩展的默认设置。")
 		return nil
 	}
 	if len(args) < 2 {
-		return errors.New("see bmc setting --help")
+		return errors.New("设置操作缺失或参数无效。运行 bmc setting --help 查看用法")
 	}
 	action, key := args[0], args[1]
 	if name, ok := strings.CutPrefix(key, sourcePrefix); ok {
@@ -68,7 +68,7 @@ func (a *app) setting(args []string) error {
 			delete(cfg.EnvDefaults, key)
 		}
 	default:
-		return errors.New("see bmc setting --help")
+		return errors.New("设置操作缺失或参数无效。运行 bmc setting --help 查看用法")
 	}
 	next, err := a.settingValue(cfg, key)
 	if err != nil {
@@ -110,22 +110,22 @@ func (a *app) settingsMenu(cfg settings.Config) error {
 		return nil
 	}
 	input := bufio.NewReader(a.in)
-	fmt.Fprint(a.out, "[1] 修改设置  [2] 恢复单项默认  [Enter] 返回: ")
+	fmt.Fprint(a.out, "[1] 修改设置  [2] 恢复单项默认  [回车] 返回：")
 	switch readChoice(input) {
 	case "1":
-		fmt.Fprintf(a.out, "设置名称（软件源使用 %s<名称>）: ", sourcePrefix)
+		fmt.Fprintf(a.out, "设置名称（软件源使用 %s<名称>）：", sourcePrefix)
 		key, _ := input.ReadString('\n')
-		fmt.Fprint(a.out, "新值: ")
+		fmt.Fprint(a.out, "新值：")
 		value, _ := input.ReadString('\n')
 		return a.setting([]string{"--set", strings.TrimSpace(key), strings.TrimRight(value, "\r\n")})
 	case "2":
-		fmt.Fprint(a.out, "设置名称: ")
+		fmt.Fprint(a.out, "设置名称：")
 		key, _ := input.ReadString('\n')
 		return a.setting([]string{"--reset", strings.TrimSpace(key)})
 	case "":
 		return nil
 	default:
-		return errors.New("invalid setting selection")
+		return errors.New("设置选项无效")
 	}
 }
 
@@ -137,7 +137,7 @@ func (a *app) checkSettings(cfg settings.Config) error {
 	for name, value := range cfg.EnvDefaults {
 		field, ok := registry[name]
 		if !ok || field.Sensitive || field.Validate(value) != nil {
-			return fmt.Errorf("invalid value for setting %s", name)
+			return fmt.Errorf("设置 %s 的值无效", name)
 		}
 	}
 	if _, err := catalog.Open(a.home).Sources(); err != nil {
@@ -158,10 +158,10 @@ func (a *app) checkSettings(cfg settings.Config) error {
 			return err
 		}
 		if p.Type != "theme" {
-			return errors.New("active theme does not reference a theme package")
+			return errors.New("当前主题设置引用的包不是主题包")
 		}
 	}
-	fmt.Fprintln(a.out, "Settings are valid.")
+	fmt.Fprintln(a.out, "设置检查通过。")
 	return nil
 }
 
@@ -171,6 +171,14 @@ func (a *app) settingValue(cfg settings.Config, key string) (string, error) {
 		if cfg.DefaultResolver == nil {
 			return "generic", nil
 		}
+		list, err := a.store.List()
+		if err == nil {
+			resolver, err := session.SelectResolver(list, "", cfg.DefaultResolver)
+			if err == nil {
+				return resolver.Selector(), nil
+			}
+		}
+		// Keep an unavailable default visible and allow the user to reset it.
 		return cfg.DefaultResolver.Export, nil
 	case "theme.active":
 		if cfg.Theme == "" {
@@ -247,7 +255,7 @@ func (a *app) settingField(key string) (envregistry.Field, error) {
 	}
 	field, ok := registry[key]
 	if !ok || field.Sensitive {
-		return envregistry.Field{}, fmt.Errorf("unknown configurable setting %q", key)
+		return envregistry.Field{}, fmt.Errorf("未找到可配置的设置 %q", key)
 	}
 	return field, nil
 }
@@ -280,7 +288,7 @@ func (a *app) sourceSetting(action, name string, args []string) error {
 			return err
 		}
 	default:
-		return errors.New("see bmc setting --help")
+		return errors.New("设置操作缺失或参数无效。运行 bmc setting --help 查看用法")
 	}
 	fmt.Fprintf(a.out, "%s%s: %q%s → %q%s\n", sourcePrefix, name,
 		redactSource(before.URL), sourceSettingOption(before), redactSource(after.URL), sourceSettingOption(after))

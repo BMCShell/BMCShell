@@ -26,7 +26,7 @@ type Store struct {
 
 func Open(root string) (*Store, error) {
 	if root == "" {
-		return nil, fmt.Errorf("package store root is required")
+		return nil, fmt.Errorf("须指定包存储根目录")
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -51,9 +51,9 @@ func (d PackageDamage) entry() registryEntry {
 func (d PackageDamage) Error() string {
 	p := d.Package
 	if p.Name != "" {
-		return fmt.Sprintf("%s@%s (%s) at %s: %v", p.Name, p.Version, p.ID, p.Root, d.Err)
+		return fmt.Sprintf("%s@%s（%s，路径 %s）：%v", p.Name, p.Version, p.ID, p.Root, d.Err)
 	}
-	return fmt.Sprintf("%s %s at %s: %v", p.ID, p.Version, p.Root, d.Err)
+	return fmt.Sprintf("%s %s（路径 %s）：%v", p.ID, p.Version, p.Root, d.Err)
 }
 
 func (s *Store) List() ([]Package, error) {
@@ -131,14 +131,14 @@ func inventorySet(root string) ([]Package, []PackageDamage, error) {
 
 func loadLegacyPackage(path string, entry os.DirEntry) (Package, error) {
 	if !entry.IsDir() {
-		return Package{}, fmt.Errorf("invalid package directory %s", path)
+		return Package{}, fmt.Errorf("包目录 %s 无效", path)
 	}
 	p, err := loadPackage(path)
 	if err != nil {
 		return Package{}, err
 	}
 	if p.ID != entry.Name() {
-		return Package{}, fmt.Errorf("installed package ID %s does not match directory %s", p.ID, entry.Name())
+		return Package{}, fmt.Errorf("已安装的包 ID %s 与目录 %s 不一致", p.ID, entry.Name())
 	}
 	p.Source, err = readSource(path)
 	return p, err
@@ -147,7 +147,7 @@ func loadLegacyPackage(path string, entry os.DirEntry) (Package, error) {
 func publishableDamages(damaged []PackageDamage) error {
 	for _, issue := range damaged {
 		if issue.legacy {
-			return fmt.Errorf("restore the old-layout package before changing registrations: %w", issue)
+			return fmt.Errorf("请先恢复旧目录结构中的包，再修改登记记录：%w", issue)
 		}
 	}
 	return nil
@@ -214,7 +214,7 @@ func (s *Store) FindName(name, kind string) (Package, error) {
 			return Package{}, &AmbiguousNameError{Name: name, Matches: matches}
 		}
 	}
-	return Package{}, fmt.Errorf("package %q is not installed", name)
+	return Package{}, fmt.Errorf("包 %q 尚未安装", name)
 }
 
 // The shipped Book IDs retain their v2 command spellings across package updates.
@@ -243,7 +243,7 @@ func (e *AmbiguousNameError) Error() string {
 		}
 		candidates[i] = fmt.Sprintf("%s %s %s (%s)", p.Type, source, p.Version, p.ID)
 	}
-	return fmt.Sprintf("ambiguous package name %q; use a UUID from: %s", e.Name, strings.Join(candidates, ", "))
+	return fmt.Sprintf("包名 %q 匹配多个包，请指定其中一个 UUID：%s", e.Name, strings.Join(candidates, ", "))
 }
 
 func findPackage(installed []Package, selector string) (Package, error) {
@@ -262,7 +262,7 @@ func findPackage(installed []Package, selector string) (Package, error) {
 	if len(matches) > 1 {
 		return Package{}, &AmbiguousNameError{Name: selector, Matches: matches}
 	}
-	return Package{}, fmt.Errorf("package %q is not installed", selector)
+	return Package{}, fmt.Errorf("包 %q 尚未安装", selector)
 }
 
 func (s *Store) lock() (func(), error) {
@@ -272,7 +272,7 @@ func (s *Store) lock() (func(), error) {
 	}
 	unlock, err := filelock.Acquire(filepath.Join(root, ".package-store.lock"))
 	if err != nil {
-		return nil, fmt.Errorf("package store lock: %w", err)
+		return nil, fmt.Errorf("无法锁定包存储目录：%w", err)
 	}
 	return unlock, nil
 }
@@ -341,7 +341,7 @@ func (s *Store) stagePackage(source, stage string) (Package, error) {
 			return Package{}, err
 		}
 		if containsDir(resolvedSource, resolvedStage) {
-			return Package{}, fmt.Errorf("package source cannot contain the package staging directory")
+			return Package{}, fmt.Errorf("包来源目录不能包含临时安装目录")
 		}
 	}
 	if info.IsDir() {
@@ -349,7 +349,7 @@ func (s *Store) stagePackage(source, stage string) (Package, error) {
 	} else if info.Mode().IsRegular() && strings.EqualFold(filepath.Ext(source), ".zip") {
 		err = extractZIP(source, stage)
 	} else {
-		err = fmt.Errorf("package source must be a directory or ZIP")
+		err = fmt.Errorf("包来源须为目录或 ZIP 文件")
 	}
 	if err != nil {
 		return Package{}, err
@@ -359,7 +359,7 @@ func (s *Store) stagePackage(source, stage string) (Package, error) {
 		return Package{}, err
 	}
 	if p.Type == "book" && !strings.HasSuffix(strings.ToLower(p.Data), ".book.db") {
-		return Package{}, fmt.Errorf("Book data file must end in .book.db: %q", p.Data)
+		return Package{}, fmt.Errorf("工具书数据文件 %q 须以 .book.db 结尾", p.Data)
 	}
 	if err := p.validateDocumentation(); err != nil {
 		return Package{}, err
@@ -370,7 +370,7 @@ func (s *Store) stagePackage(source, stage string) (Package, error) {
 			return Package{}, err
 		}
 		if _, err := librarydb.Validate(path, p.ID, *p.Library); err != nil {
-			return Package{}, fmt.Errorf("invalid Library data: %w", err)
+			return Package{}, fmt.Errorf("业务库数据无效：%w", err)
 		}
 	}
 	return p, nil
@@ -386,7 +386,7 @@ func checkInstall(p Package, installed []Package) error {
 	schemas := make(map[string]int, len(installed))
 	for _, previous := range installed {
 		if previous.ID == p.ID {
-			return fmt.Errorf("package %s is already installed at %s", p.ID, previous.Version)
+			return fmt.Errorf("包 %s 已安装在 %s", p.ID, previous.Version)
 		}
 		versions[previous.ID] = previous.Version
 		if previous.Library != nil {
@@ -394,12 +394,12 @@ func checkInstall(p Package, installed []Package) error {
 		}
 		for name := range p.Provides.Tools {
 			if _, exists := previous.Provides.Tools[name]; exists {
-				return fmt.Errorf("tool %q is already provided by %s", name, previous.ID)
+				return fmt.Errorf("工具 %q 已由 %s 提供", name, previous.ID)
 			}
 		}
 		for name := range p.Provides.Resolvers {
 			if _, exists := previous.Provides.Resolvers[name]; exists {
-				return fmt.Errorf("resolver %q is already provided by %s", name, previous.ID)
+				return fmt.Errorf("解析器 %q 已由 %s 提供", name, previous.ID)
 			}
 		}
 	}
@@ -410,17 +410,17 @@ func checkPrerequisites(p Package, versions map[string]string, schemas map[strin
 	for id, constraint := range p.Dependencies {
 		version := versions[id]
 		if version == "" || (constraint != "*" && constraint != version) {
-			return fmt.Errorf("package %s requires %s at %s", p.ID, id, constraint)
+			return fmt.Errorf("包 %s 需要包 %s 的 %s 版本", p.ID, id, constraint)
 		}
 	}
 	for _, id := range p.Members {
 		if versions[id] == "" {
-			return fmt.Errorf("install bundle member %s first", id)
+			return fmt.Errorf("请先安装 Bundle 成员 %s", id)
 		}
 	}
 	for id, supported := range p.LibrarySchemas {
 		if version := schemas[id]; !supported.Supports(version) {
-			return fmt.Errorf("package %s requires Library %s schema %d–%d, found %d", p.ID, id, supported.Min, supported.Max, version)
+			return fmt.Errorf("包 %s 需要业务库 %s 的结构版本为 %d 到 %d，实际为 %d", p.ID, id, supported.Min, supported.Max, version)
 		}
 	}
 	return nil
@@ -469,11 +469,11 @@ func (s *Store) Remove(selector string) error {
 		_, depends := other.Dependencies[p.ID]
 		_, needsSchema := other.LibrarySchemas[p.ID]
 		if depends || needsSchema {
-			return fmt.Errorf("package %s is required by %s", p.ID, other.ID)
+			return fmt.Errorf("包 %s 被 %s 依赖", p.ID, other.ID)
 		}
 		for _, id := range other.Members {
 			if id == p.ID {
-				return fmt.Errorf("package %s is a member of bundle %s", p.ID, other.ID)
+				return fmt.Errorf("包 %s 是 Bundle %s 的成员", p.ID, other.ID)
 			}
 		}
 	}
@@ -521,10 +521,10 @@ func (c *copier) reserve(name string) error {
 	}
 	folded := strings.ToLower(name)
 	if c.seen[folded] {
-		return fmt.Errorf("duplicate package path %q", name)
+		return fmt.Errorf("包内路径 %q 重复", name)
 	}
 	if len(c.seen) == maxPackageFiles {
-		return fmt.Errorf("package exceeds %d entries", maxPackageFiles)
+		return fmt.Errorf("包的条目数超过 %d", maxPackageFiles)
 	}
 	c.seen[folded] = true
 	return nil
@@ -532,7 +532,7 @@ func (c *copier) reserve(name string) error {
 
 func (c *copier) file(name string, mode fs.FileMode, size int64, source io.Reader) error {
 	if size < 0 || size > maxPackageBytes-c.bytes {
-		return fmt.Errorf("package exceeds %d bytes", maxPackageBytes)
+		return fmt.Errorf("包大小超过 %d 字节", maxPackageBytes)
 	}
 	path := filepath.Join(c.root, filepath.FromSlash(name))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -548,7 +548,7 @@ func (c *copier) file(name string, mode fs.FileMode, size int64, source io.Reade
 		return copyErr
 	}
 	if count != size {
-		return fmt.Errorf("package file %q changed size", name)
+		return fmt.Errorf("包文件 %q 的大小已变更", name)
 	}
 	c.bytes += count
 	return closeErr
@@ -589,7 +589,7 @@ func copyPackageDirectory(source, target string, installed bool) error {
 			return err
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported package file %q", name)
+			return fmt.Errorf("不支持包文件 %q", name)
 		}
 		file, err := os.Open(path)
 		if err != nil {
@@ -626,7 +626,7 @@ func extractZIP(source, target string) error {
 			continue
 		}
 		if !mode.IsRegular() || entry.UncompressedSize64 > maxPackageBytes {
-			return fmt.Errorf("unsupported ZIP entry %q", name)
+			return fmt.Errorf("ZIP 条目 %q 不受支持", name)
 		}
 		file, err := entry.Open()
 		if err != nil {

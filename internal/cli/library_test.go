@@ -59,7 +59,7 @@ func TestLibraryPackageUpgrade(t *testing.T) {
 				INSERT INTO records (key,value) VALUES ('NEW','new');`)
 			var output bytes.Buffer
 			a.out = &output
-			if err := a.installLocalPackage(incoming, bufio.NewReader(strings.NewReader(tc.input)), tc.interactive); err != nil {
+			if err := a.installLocalPackages([]string{incoming}, bufio.NewReader(strings.NewReader(tc.input)), tc.interactive); err != nil {
 				t.Fatal(err)
 			}
 			for _, message := range []string{"字段冲突", "拟删除", "本地记录已修改", "新增", "修改"} {

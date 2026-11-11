@@ -173,6 +173,15 @@ func TestLibraryConflictPreviewRedacts(t *testing.T) {
 }
 
 func TestLibraryMigratesLegacyJSONWithoutDiscardingRecords(t *testing.T) {
+	for _, columns := range [][2]string{{"key", "value"}, {"ID", "value"}, {"ID", "brief"}} {
+		t.Run(columns[0]+"-"+columns[1], func(t *testing.T) {
+			testLibraryMigratesLegacyJSON(t, columns[0], columns[1])
+		})
+	}
+}
+
+func testLibraryMigratesLegacyJSON(t *testing.T, keyColumn, valueColumn string) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("BMCSHELL_HOME", home)
 	manifest := recoveryLibraryManifest()
@@ -182,17 +191,28 @@ func TestLibraryMigratesLegacyJSONWithoutDiscardingRecords(t *testing.T) {
 	legacy := libraryFixture(t, manifest)
 	if err := os.WriteFile(filepath.Join(legacy, manifest.Data), []byte(`[
 		{"key":"DEMO01","value":"legacy edit"},
-		{"key":"LOCAL","value":"legacy only"}
+		{"key":"0001","value":"legacy only"}
 	]`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	libraryCLI(t, 0, "", "plugin", "install", "--file", legacy)
 	sqlite.Version = "1.0.1"
+	sqlite.Library.Tables[0].Keys = []string{keyColumn}
+	sqlite.Library.Lookup.Value = valueColumn
 	incoming := libraryFixture(t, sqlite)
-	libraryExec(t, filepath.Join(incoming, sqlite.Data), "INSERT INTO records (key,value) VALUES ('NEW','incoming')")
+	dbPath := filepath.Join(incoming, sqlite.Data)
+	key := librarydb.QuoteIdentifier(keyColumn)
+	value := librarydb.QuoteIdentifier(valueColumn)
+	if keyColumn != "key" {
+		libraryExec(t, dbPath, "ALTER TABLE records RENAME COLUMN key TO "+key)
+	}
+	if valueColumn != "value" {
+		libraryExec(t, dbPath, "ALTER TABLE records RENAME COLUMN value TO "+value)
+	}
+	libraryExec(t, dbPath, "INSERT INTO records ("+key+","+value+") VALUES ('NEW','incoming')")
 	libraryCLI(t, 0, "", "plugin", "install", "--file", incoming)
 	_, state := installedLibrary(t, home, manifest.ID)
-	for key, expected := range map[string]string{"DEMO01": "legacy edit", "LOCAL": "legacy only", "NEW": "incoming"} {
+	for key, expected := range map[string]string{"DEMO01": "legacy edit", "0001": "legacy only", "NEW": "incoming"} {
 		if value, err := librarydb.Query(state.work, manifest.ID, *sqlite.Library, []string{key}); err != nil || value != expected {
 			t.Fatalf("%s = %q, %v, want %q", key, value, err, expected)
 		}

@@ -1,8 +1,10 @@
 package packages
 
 import (
-	"strings"
+	"errors"
 	"testing"
+
+	"bmcshell/internal/filelock"
 )
 
 func TestSyncRepairSuggestionsKeepsCurrentPackageSnapshot(t *testing.T) {
@@ -26,7 +28,7 @@ func TestSyncRepairSuggestionsKeepsCurrentPackageSnapshot(t *testing.T) {
 		if len(installed) != 1 || installed[0].ID != plugin.ID {
 			t.Fatalf("collector got installed packages %+v", installed)
 		}
-		if err := store.Remove(plugin.ID); err == nil || !strings.Contains(err.Error(), "busy") {
+		if err := store.Remove(plugin.ID); !errors.Is(err, filelock.ErrBusy) {
 			t.Fatalf("package mutation during collection = %v", err)
 		}
 		return []RepairRecord{pluginRecord, framework, pluginRecord}, nil

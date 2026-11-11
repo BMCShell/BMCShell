@@ -1,3 +1,18 @@
+<#
+.SYNOPSIS
+    预览或备份并清理 BMCShell 的历史版本。
+.PARAMETER InstallationDirectory
+    必填。便携安装目录。
+.PARAMETER DataDirectory
+    框架数据目录。默认取 BMCSHELL_HOME，未设置时使用安装目录。
+.PARAMETER BackupDirectory
+    备份目录。使用 -Apply 时必填，目录须位于安装目录和数据目录之外。
+.PARAMETER Apply
+    验证备份后执行清理。省略时仅预览可清理路径。
+.EXAMPLE
+    ./scripts/maintain-history.ps1 -InstallationDirectory 'D:/BMCShell'
+#>
+
 #requires -Version 7.4
 [CmdletBinding()]
 param(
@@ -20,7 +35,7 @@ function Assert-NoLinks([string] $Path) {
     $node = Get-Item -LiteralPath $Path -Force
     while ($null -ne $node) {
         if ($node.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            throw "Reparse points are not supported by history maintenance: $($node.FullName)"
+            throw "历史版本维护不支持重解析点：$($node.FullName)"
         }
         $node = if ($node -is [IO.FileInfo]) { $node.Directory } else { $node.Parent }
     }
@@ -28,7 +43,7 @@ function Assert-NoLinks([string] $Path) {
 
 function Resolve-Directory([string] $Path) {
     $item = Get-Item -LiteralPath $Path -Force
-    if ($item -isnot [IO.DirectoryInfo]) { throw "Expected a directory: $Path" }
+    if ($item -isnot [IO.DirectoryInfo]) { throw "路径必须指向目录：$Path" }
     Assert-NoLinks $item.FullName
     return $item.FullName
 }
@@ -38,11 +53,11 @@ function Get-ActiveExecutable([string] $Root) {
     Assert-NoLinks $marker
     $version = ([IO.File]::ReadAllText($marker)).TrimEnd([char]13, [char]10)
     if ($version -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?\z') {
-        throw "Invalid active release: $marker"
+        throw "活动版本标记无效：$marker"
     }
     $path = Join-Path $Root "bin/releases/$version/BMCShell.exe"
     $item = Get-Item -LiteralPath $path -Force
-    if ($item -isnot [IO.FileInfo]) { throw "Missing release executable: $path" }
+    if ($item -isnot [IO.FileInfo]) { throw "找不到发行版可执行文件：$path" }
     Assert-NoLinks $item.FullName
     return $item.FullName
 }
@@ -58,7 +73,7 @@ function Invoke-History([string] $Executable, [string] $Profile, [string] $Actio
         } else {
             & $Executable bridge history $Action
         }
-        if ($LASTEXITCODE -ne 0) { throw "BMCShell history $Action failed (exit $LASTEXITCODE)." }
+        if ($LASTEXITCODE -ne 0) { throw "BMCShell 历史版本操作 $Action 失败（退出码 $LASTEXITCODE）。" }
         if ($Action -in 'preview', 'plan') { return $result | ConvertFrom-Json }
     } finally {
         $env:BMCSHELL_HOME = $previousData
@@ -94,7 +109,7 @@ function Read-Tree([string] $Root, [string] $CopyTo) {
     while ($pending.Count -gt 0) {
         foreach ($item in (Get-ChildItem -LiteralPath ($pending.Pop()) -Force)) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw "Reparse point in BMCShell profile: $($item.FullName)"
+                throw "BMCShell 数据目录中存在重解析点：$($item.FullName)"
             }
             if ($excludedLocks.Contains($item.FullName)) { continue }
             $relative = [IO.Path]::GetRelativePath($Root, $item.FullName)
@@ -116,10 +131,10 @@ function Read-Tree([string] $Root, [string] $CopyTo) {
 }
 
 function Assert-SameTree($Expected, $Actual, [string] $Description) {
-    if ($Expected.Count -ne $Actual.Count) { throw "File list changed: $Description" }
+    if ($Expected.Count -ne $Actual.Count) { throw "文件列表已变更：$Description" }
     foreach ($path in $Expected.Keys) {
         if (!$Actual.ContainsKey($path) -or $Actual[$path] -ne $Expected[$path]) {
-            throw "File did not verify ($Description): $path"
+            throw "文件校验失败（$Description）：$path"
         }
     }
 }
@@ -139,27 +154,27 @@ $executable = Get-ActiveExecutable $installation
 $preview = Invoke-History $executable $profile 'preview'
 $planned = @(Get-Candidates $preview | Sort-Object)
 if ($planned.Count -eq 0) {
-    'No verified historical versions are eligible for cleanup.'
+    '没有通过校验且可清理的历史版本。'
     return
 }
 if (!$Apply) {
     $planned
     return
 }
-if (!$BackupDirectory) { throw 'Use -BackupDirectory with -Apply.' }
+if (!$BackupDirectory) { throw '使用 -Apply 时必须指定 -BackupDirectory。' }
 $backup = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($BackupDirectory)
 $backupParent = Resolve-Directory ([IO.Path]::GetDirectoryName($backup))
 $backup = Join-Path $backupParent ([IO.Path]::GetFileName($backup))
 foreach ($root in @($installation, $profile)) {
     if ($backup -eq $root -or (Test-Within $backup $root) -or (Test-Within $root $backup)) {
-        throw 'Place the new backup directory outside the installation and data directories.'
+        throw '请将备份目录设在安装目录和数据目录之外。'
     }
 }
-if (Test-Path -LiteralPath $backup) { throw "Backup directory already exists: $backup" }
+if (Test-Path -LiteralPath $backup) { throw "备份目录已存在：$backup" }
 
 foreach ($process in Get-Process -Name 'BMCShell' -ErrorAction SilentlyContinue) {
     if ($process.Path -and ((Test-Within $process.Path $installation) -or (Test-Within $process.Path $profile))) {
-        throw 'Close BMCShell terminals and running BMCShell processes before applying cleanup.'
+        throw '清理前，请关闭加载 BMCShell 的终端和正在运行的 BMCShell 进程。'
     }
 }
 $releaseLockPath = Join-Path $installation '.release-update.lock'
@@ -174,7 +189,7 @@ try {
     $currentPreview = Invoke-History $executable $profile 'preview'
     $currentPaths = @(Get-Candidates $currentPreview | Sort-Object)
     if ($currentPaths.Count -ne $planned.Count -or (Compare-Object $planned $currentPaths)) {
-        throw 'History changed. Run the preview again.'
+        throw '历史版本已变更，请重新预览。'
     }
 
     $null = [IO.Directory]::CreateDirectory($backup)
@@ -196,10 +211,10 @@ try {
     $backupExe = Get-ActiveExecutable $backupInstall
     $backupVersion = & $backupExe --version
     if ($LASTEXITCODE -ne 0 -or $backupVersion -ne (& $executable --version)) {
-        throw 'The copied installation could not be started.'
+        throw '无法启动备份中的 BMCShell。'
     }
     Invoke-History $backupExe $backupProfile 'verify'
-    "Verified backup: $backup"
+    "已验证备份：$backup"
 
     if (@($currentPreview.Libraries).Count -gt 0 -and $null -ne $currentPreview.Libraries) {
         $profileLock.Dispose()
@@ -211,12 +226,12 @@ try {
     $ready = Invoke-History $executable $profile 'plan'
     $readyPaths = @(Get-Candidates $ready | Sort-Object)
     if ($readyPaths.Count -ne $planned.Count -or (Compare-Object $planned $readyPaths)) {
-        throw 'History changed after backup. Run the preview again.'
+        throw '历史版本在备份后变更，请重新预览。'
     }
     foreach ($path in $readyPaths) {
         $resolved = Resolve-Directory $path
         if ($resolved -ne $path -or $resolved -eq $profile -or (Test-Within $profile $resolved)) {
-            throw "Unexpected cleanup path: $path"
+            throw "待清理路径与预期不符：$path"
         }
         $copied = if (Test-Within $resolved (Join-Path $installation 'bin/releases')) {
             Join-Path $backupInstall ([IO.Path]::GetRelativePath($installation, $resolved))
@@ -225,11 +240,11 @@ try {
                   (Test-Within $resolved (Join-Path $profile 'libraries'))) {
             Join-Path $backupProfile ([IO.Path]::GetRelativePath($profile, $resolved))
         } else {
-            throw "Cleanup path is outside version storage: $resolved"
+            throw "待清理路径超出版本存储目录：$resolved"
         }
         Assert-SameTree (Read-Tree $resolved) (Read-Tree (Resolve-Directory $copied)) $resolved
         Remove-Item -LiteralPath $resolved -Recurse -Force
-        "Removed history: $resolved"
+        "已清理历史版本：$resolved"
     }
 } finally {
     if ($null -ne $profileLock) { $profileLock.Dispose() }

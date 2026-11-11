@@ -18,7 +18,7 @@ func auditSize(path string) (int64, error) {
 		return 0, err
 	}
 	if !info.Mode().IsRegular() {
-		return 0, errors.New("Library 审计文件不是普通文件")
+		return 0, errors.New("业务库的审计文件不是普通文件")
 	}
 	return info.Size(), nil
 }
@@ -42,7 +42,7 @@ func writeAuditLine(path string, pending librarydb.AuditAppend) error {
 		return err
 	}
 	if size < pending.Offset || size-pending.Offset > int64(len(pending.Line)) {
-		return errors.New("Library 审计文件长度与工作库中的待同步记录不符")
+		return errors.New("业务库的审计文件长度与工作库中的待同步记录不符")
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
@@ -70,7 +70,7 @@ func (a *app) recoverLibraryAudit(p packages.Package, state libraryFiles) error 
 		return err
 	}
 	if current.registered != state.registered {
-		return fmt.Errorf("Library 工作库已切换，请重新打开")
+		return fmt.Errorf("业务库的工作库已切换，请重新打开")
 	}
 	return flushLibraryAudit(current)
 }

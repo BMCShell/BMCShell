@@ -3,6 +3,7 @@ package librarydb
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"slices"
@@ -23,9 +24,11 @@ type Contract struct {
 }
 
 type Table struct {
-	Name            string   `json:"name"`
-	Keys            []string `json:"keys"`
-	SensitiveFields []string `json:"sensitiveFields,omitempty"`
+	Name            string           `json:"name"`
+	Keys            []string         `json:"keys"`
+	SensitiveFields []string         `json:"sensitiveFields,omitempty"`
+	ViewColumns     []string         `json:"viewColumns,omitempty"`
+	Fields          map[string]Field `json:"fields,omitempty"`
 }
 
 type Lookup struct {
@@ -35,23 +38,23 @@ type Lookup struct {
 
 func (c Contract) Validate() error {
 	if c.SchemaVersion < 1 || c.SchemaVersion > math.MaxInt32 || len(c.Tables) == 0 {
-		return fmt.Errorf("Library needs a positive SQLite schemaVersion and at least one table")
+		return fmt.Errorf("业务库须声明正整数 schemaVersion 和至少一张表")
 	}
 	seen := make(map[string]bool)
 	for _, table := range c.Tables {
 		name := strings.ToLower(table.Name)
 		if !validIdentifier(table.Name) || (name == metadataTable || name == pendingAuditTable) || strings.HasPrefix(name, "sqlite_") || seen[name] {
-			return fmt.Errorf("invalid or duplicate Library table %q", table.Name)
+			return fmt.Errorf("业务库表 %q 无效或重复", table.Name)
 		}
 		seen[name] = true
 		if len(table.Keys) == 0 {
-			return fmt.Errorf("Library table %q needs a stable key", table.Name)
+			return fmt.Errorf("业务库表 %q 须声明稳定键", table.Name)
 		}
 		keys := make(map[string]bool)
 		for _, key := range table.Keys {
 			folded := strings.ToLower(key)
 			if !validIdentifier(key) || keys[folded] {
-				return fmt.Errorf("invalid or duplicate key %q for Library table %q", key, table.Name)
+				return fmt.Errorf("键 %q 在业务库表 %q 中无效或重复", key, table.Name)
 			}
 			keys[folded] = true
 		}
@@ -59,16 +62,35 @@ func (c Contract) Validate() error {
 		for _, field := range table.SensitiveFields {
 			folded := strings.ToLower(field)
 			if !validIdentifier(field) || sensitive[folded] {
-				return fmt.Errorf("invalid or duplicate sensitive field %q for Library table %q", field, table.Name)
+				return fmt.Errorf("敏感字段 %q 在业务库表 %q 中无效或重复", field, table.Name)
 			}
 			sensitive[folded] = true
+		}
+		if table.ViewColumns != nil && len(table.ViewColumns) == 0 {
+			return fmt.Errorf("业务库表 %q 的 viewColumns 须包含至少一列", table.Name)
+		}
+		viewColumns := make(map[string]bool)
+		for _, column := range table.ViewColumns {
+			folded := strings.ToLower(column)
+			if !validIdentifier(column) || viewColumns[folded] || c.Sensitive(table.Name, column) {
+				return fmt.Errorf("显示列 %q 在业务库表 %q 中无效、重复或属于敏感列", column, table.Name)
+			}
+			viewColumns[folded] = true
+		}
+		for _, column := range slices.Sorted(maps.Keys(table.Fields)) {
+			if !validIdentifier(column) {
+				return fmt.Errorf("字段名 %q 不符合业务库表 %q 的要求", column, table.Name)
+			}
+			if err := table.Fields[column].validateDefinition(); err != nil {
+				return fmt.Errorf("业务库表 %q 的字段 %q：%w", table.Name, column, err)
+			}
 		}
 	}
 	if c.Lookup == (Lookup{}) {
 		return nil
 	}
 	if !validIdentifier(c.Lookup.Value) || c.lookupTable().Name == "" {
-		return fmt.Errorf("Library lookup needs a declared table and a value column")
+		return fmt.Errorf("业务库查询须指定已声明的数据表和值列")
 	}
 	return nil
 }

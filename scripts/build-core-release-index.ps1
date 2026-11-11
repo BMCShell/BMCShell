@@ -1,3 +1,12 @@
+<#
+.SYNOPSIS
+    读取 BMCShell 在 GitHub 上的框架发布记录，生成版本索引。
+.PARAMETER Output
+    必填。索引 JSON 的输出路径。
+.EXAMPLE
+    ./scripts/build-core-release-index.ps1 -Output ./index.json
+#>
+
 #requires -Version 7.4
 [CmdletBinding()]
 param(
@@ -22,12 +31,12 @@ function Get-AssetDownloadUrl($Asset, [string] $Tag) {
     $prefix = "/$repository/releases/download/"
     if (!$url.IsAbsoluteUri -or $url.Scheme -cne 'https' -or $url.Host -cne 'github.com' -or
         !$url.IsDefaultPort -or $url.UserInfo -or $url.Query -or $url.Fragment) {
-        throw "Invalid download URL for $Tag asset '$($Asset.name)'."
+        throw "标签 $Tag 的发布文件 '$($Asset.name)' 下载 URL 无效。"
     }
     $path = [uri]::UnescapeDataString($url.AbsolutePath)
     if (!$path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
         $path.Substring($prefix.Length) -cne "$Tag/$($Asset.name)") {
-        throw "Invalid download path for $Tag asset '$($Asset.name)'."
+        throw "标签 $Tag 的发布文件 '$($Asset.name)' 下载路径无效。"
     }
     $url.AbsoluteUri
 }
@@ -44,7 +53,7 @@ function Get-CoreArtifact($Release, [string] $Version) {
     $url = Get-AssetDownloadUrl $archive $tag
     $manifestUrl = Get-AssetDownloadUrl $checksum $tag
     if ($archive.size -le 0 -or $checksum.size -le 0 -or $checksum.size -gt $manifestLimit) {
-        throw "Invalid asset size for $tag."
+        throw "标签 $tag 的发布文件大小无效。"
     }
 
     $temporary = New-TemporaryFile
@@ -52,12 +61,12 @@ function Get-CoreArtifact($Release, [string] $Version) {
         # The release URL is public. Send no API token to the asset or its CDN.
         Invoke-WebRequest -Uri $manifestUrl -OutFile $temporary.FullName -TimeoutSec 60 -MaximumRetryCount 2 -RetryIntervalSec 2
         if ((Get-Item -LiteralPath $temporary.FullName).Length -ne $checksum.size) {
-            throw "Checksum manifest size mismatch for $tag."
+            throw "标签 $tag 的校验清单大小与发布记录不符。"
         }
         if ($checksum.digest) {
             $digest = (Get-FileHash -LiteralPath $temporary.FullName -Algorithm SHA256).Hash
             if ($checksum.digest -ine "sha256:$digest") {
-                throw "Checksum manifest digest mismatch for $tag."
+                throw "标签 $tag 的校验清单摘要与发布记录不符。"
             }
         }
         $metadata = Get-Content -LiteralPath $temporary.FullName -Raw | ConvertFrom-Json -AsHashtable
@@ -69,11 +78,11 @@ function Get-CoreArtifact($Release, [string] $Version) {
         $metadata.product -cne 'BMCShell' -or $metadata.version -cne $Version -or
         $metadata.platform -cne 'windows-amd64' -or $metadata.artifact -cne $archive.name -or
         $metadata.sha256 -isnot [string] -or $metadata.sha256 -notmatch '\A[0-9a-f]{64}\z') {
-        throw "Invalid BMCShell release manifest for $tag."
+        throw "标签 $tag 的 BMCShell 发行清单无效。"
     }
     $hash = $metadata.sha256.ToLowerInvariant()
     if ($archive.digest -and $archive.digest -ine "sha256:$hash") {
-        throw "ZIP digest differs from the checksum manifest for $tag."
+        throw "标签 $tag 的 ZIP 摘要与校验清单不符。"
     }
 
     [ordered]@{

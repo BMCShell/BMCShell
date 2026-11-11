@@ -22,7 +22,7 @@ type registryRollback struct {
 
 // LibraryActivation selects a prepared generation for a package version.
 type LibraryActivation struct {
-	ID, Version, Previous, Generation        string
+	ID, Version, Previous, Generation         string
 	PredecessorVersion, PredecessorGeneration string
 }
 
@@ -30,7 +30,7 @@ var libraryGenerationName = regexp.MustCompile("^gen-[a-zA-Z0-9-]{1,96}$")
 
 func (s *Store) payloadPath(entry registryEntry, createParents bool) (string, error) {
 	if !packageID.MatchString(entry.ID) || ValidateVersion(entry.Version) != nil {
-		return "", fmt.Errorf("invalid installed package identity %s %s", entry.ID, entry.Version)
+		return "", fmt.Errorf("已安装包的标识 %s %s 无效", entry.ID, entry.Version)
 	}
 	var parts []string
 	switch entry.Kind {
@@ -41,7 +41,7 @@ func (s *Store) payloadPath(entry registryEntry, createParents bool) (string, er
 	case "tool", "theme", "bundle":
 		parts = []string{"plugins", entry.Kind, entry.ID}
 	default:
-		return "", fmt.Errorf("invalid installed package type %q", entry.Kind)
+		return "", fmt.Errorf("已安装的包类型 %q 无效", entry.Kind)
 	}
 	parent, err := s.layoutDirectory(parts, createParents)
 	if err != nil {
@@ -64,7 +64,7 @@ func (s *Store) layoutDirectory(parts []string, create bool) (string, error) {
 			return "", err
 		}
 		if !info.IsDir() {
-			return "", fmt.Errorf("invalid installed storage directory %q", path)
+			return "", fmt.Errorf("安装存储目录 %q 无效", path)
 		}
 	}
 	return path, nil
@@ -142,17 +142,17 @@ func (s *Store) loadRegisteredPackage(entry registryEntry) (Package, error) {
 		return fallback, err
 	}
 	if !info.IsDir() {
-		return fallback, fmt.Errorf("invalid package payload directory %q", path)
+		return fallback, fmt.Errorf("包内容目录 %q 无效", path)
 	}
 	p, err := loadPackage(path)
 	if err != nil {
-		return fallback, fmt.Errorf("installed package %s: %w", entry.ID, err)
+		return fallback, fmt.Errorf("已安装的包 %s：%w", entry.ID, err)
 	}
 	if p.ID != entry.ID || CanonicalType(p.Type) != entry.Kind || p.Version != entry.Version {
-		return fallback, fmt.Errorf("installed package %s manifest does not match its registry entry", entry.ID)
+		return fallback, fmt.Errorf("已安装的包 %s 的清单与登记记录不一致", entry.ID)
 	}
 	if entry.Source != "" && !originName.MatchString(entry.Source) {
-		return fallback, fmt.Errorf("installed package %s has an invalid source", entry.ID)
+		return fallback, fmt.Errorf("已安装的包 %s 的来源无效", entry.ID)
 	}
 	if _, err := p.RepairRecords(); err != nil {
 		return fallback, err
@@ -202,7 +202,7 @@ func repairSelectedRelease(p Package, damaged []PackageDamage) (bool, error) {
 			continue
 		}
 		if current.Type != CanonicalType(p.Type) || current.Version != p.Version {
-			return false, fmt.Errorf("repair %s with its registered %s version %s first", p.ID, current.Type, current.Version)
+			return false, fmt.Errorf("请先按已登记的类型和版本修复 %s（%s %s）", p.ID, current.Type, current.Version)
 		}
 		return true, nil
 	}
@@ -280,7 +280,7 @@ func publishPayload(p Package, target string) error {
 			return err
 		}
 		if first != second {
-			return fmt.Errorf("package %s %s has different contents; publish a new version", p.Name, p.Version)
+			return fmt.Errorf("包 %s %s 的内容有变更，请发布新版本", p.Name, p.Version)
 		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -402,14 +402,14 @@ func (s *Store) readRegistryRollback() (*registryRollback, error) {
 	}
 	var rollback registryRollback
 	if err := json.Unmarshal(data, &rollback); err != nil {
-		return nil, fmt.Errorf("invalid package rollback record: %w", err)
+		return nil, fmt.Errorf("包回滚记录无效：%w", err)
 	}
 	return &rollback, nil
 }
 
 func (s *Store) LibraryGeneration(id, version string) (string, error) {
 	if !packageID.MatchString(id) || ValidateVersion(version) != nil {
-		return "", fmt.Errorf("invalid Library identity %s %s", id, version)
+		return "", fmt.Errorf("业务库标识 %s %s 无效", id, version)
 	}
 	db, err := s.openMetadata("ro")
 	if errors.Is(err, os.ErrNotExist) {
@@ -432,7 +432,7 @@ func (s *Store) LibraryGeneration(id, version string) (string, error) {
 		return "", err
 	}
 	if !libraryGenerationName.MatchString(selected) {
-		return "", errors.New("invalid registered Library generation")
+		return "", errors.New("已登记的业务库数据版本无效")
 	}
 	return selected, nil
 }
@@ -494,10 +494,10 @@ func validateLibrarySelections(list []Package, activations []LibraryActivation) 
 	for _, activation := range activations {
 		p, err := findPackage(list, activation.ID)
 		if err != nil || p.ID != activation.ID || p.Version != activation.Version || p.Library == nil {
-			return fmt.Errorf("Library %s %s is no longer selected", activation.ID, activation.Version)
+			return fmt.Errorf("业务库 %s %s 已不再选用", activation.ID, activation.Version)
 		}
 		if seen[activation.ID] {
-			return fmt.Errorf("repeated Library selection %s", activation.ID)
+			return fmt.Errorf("业务库 %s 被重复选中", activation.ID)
 		}
 		seen[activation.ID] = true
 	}
@@ -507,7 +507,7 @@ func validateLibrarySelections(list []Package, activations []LibraryActivation) 
 func (s *Store) validateLibraryActivation(activation LibraryActivation) error {
 	if !packageID.MatchString(activation.ID) || ValidateVersion(activation.Version) != nil ||
 		!libraryGenerationName.MatchString(activation.Generation) {
-		return errors.New("invalid Library generation selection")
+		return errors.New("选择的业务库数据版本无效")
 	}
 	_, err := s.layoutDirectory([]string{"libraries", activation.ID, activation.Generation}, false)
 	return err
@@ -521,7 +521,7 @@ func selectLibraryGeneration(tx *sql.Tx, activation LibraryActivation) error {
 		return err
 	}
 	if current != activation.Previous {
-		return fmt.Errorf("Library %s generation changed; prepare the update again", activation.ID)
+		return fmt.Errorf("业务库 %s 的当前数据版本发生变更，请重新准备更新", activation.ID)
 	}
 	_, err = tx.Exec(`
 		INSERT INTO library_generations VALUES (?, ?, ?)

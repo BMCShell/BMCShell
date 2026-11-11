@@ -8,5 +8,5 @@ import (
 )
 
 func lock(*os.File) error {
-	return errors.New("operating system does not support the BMCShell mutation lock")
+	return errors.New("当前操作系统不支持 BMCShell 写入锁")
 }

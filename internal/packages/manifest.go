@@ -39,8 +39,14 @@ func (t Tool) ManagedEnv() bool {
 }
 
 type Resolver struct {
-	Entry             string   `json:"entry"`
-	ProxyCapabilities []string `json:"proxyCapabilities,omitempty"`
+	Entry             string        `json:"entry"`
+	ProxyCapabilities []string      `json:"proxyCapabilities,omitempty"`
+	StatusFields      []StatusField `json:"statusFields,omitempty"`
+}
+
+type StatusField struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
 }
 
 type Provides struct {
@@ -103,7 +109,7 @@ type Package struct {
 
 func validatePath(rel string) error {
 	if !filepath.IsLocal(filepath.FromSlash(rel)) {
-		return fmt.Errorf("unsafe package path %q", rel)
+		return fmt.Errorf("包路径 %q 不符合路径要求", rel)
 	}
 	for _, part := range strings.Split(rel, "/") {
 		base := strings.TrimRight(strings.SplitN(part, ".", 2)[0], " ")
@@ -111,7 +117,7 @@ func validatePath(rel string) error {
 			strings.EqualFold(part, originFile) ||
 			strings.ContainsAny(part, `<>:"\|?*`) || strings.ContainsFunc(part, unicode.IsControl) ||
 			strings.TrimRight(part, ". ") != part || dosName.MatchString(strings.ToUpper(base)) {
-			return fmt.Errorf("unsafe package path %q", rel)
+			return fmt.Errorf("包路径 %q 不符合路径要求", rel)
 		}
 	}
 	return nil
@@ -131,7 +137,7 @@ func (p Package) File(rel string) (string, error) {
 			return "", err
 		}
 		if (i < len(parts)-1 && !info.IsDir()) || (i == len(parts)-1 && !info.Mode().IsRegular()) {
-			return "", fmt.Errorf("invalid package file %q", rel)
+			return "", fmt.Errorf("包文件 %q 无效", rel)
 		}
 	}
 	return path, nil
@@ -148,14 +154,14 @@ func loadPackage(root string) (Package, error) {
 		return p, err
 	}
 	if info.Size() > 1<<20 {
-		return p, fmt.Errorf("manifest exceeds 1 MiB")
+		return p, fmt.Errorf("包清单超过 1 MiB")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return p, err
 	}
 	if err := json.Unmarshal(data, &p.Manifest); err != nil {
-		return p, fmt.Errorf("invalid %s: %w", ManifestFile, err)
+		return p, fmt.Errorf("%s 无效：%w", ManifestFile, err)
 	}
 	return p, p.validate()
 }
@@ -175,7 +181,7 @@ func (p Package) validateDocumentation() error {
 		}
 		var object map[string]json.RawMessage
 		if json.Unmarshal(data, &object) != nil || object == nil {
-			return fmt.Errorf("invalid package documentation %q: expected a JSON object", rel)
+			return fmt.Errorf("包文档 %q 无效，须为 JSON 对象", rel)
 		}
 	}
 	return nil
@@ -183,10 +189,10 @@ func (p Package) validateDocumentation() error {
 
 func (p Package) validate() error {
 	if p.Schema != 1 || p.CoreAPI != 1 {
-		return fmt.Errorf("unsupported package schema or core API: %d/%d", p.Schema, p.CoreAPI)
+		return fmt.Errorf("不支持包结构版本 %d 或框架 API 版本 %d", p.Schema, p.CoreAPI)
 	}
 	if !packageID.MatchString(p.ID) {
-		return fmt.Errorf("invalid package ID %q", p.ID)
+		return fmt.Errorf("包 ID %q 无效", p.ID)
 	}
 	if err := ValidateVersion(p.Version); err != nil {
 		return err
@@ -200,7 +206,7 @@ func (p Package) validate() error {
 		compatible = compatible || supported == "any" || supported == platform
 	}
 	if !compatible {
-		return fmt.Errorf("package %s does not support %s", p.ID, platform)
+		return fmt.Errorf("包 %s 不支持平台 %s", p.ID, platform)
 	}
 	for _, rel := range []string{p.Help, p.Changelog} {
 		if _, err := p.File(rel); err != nil {
@@ -214,14 +220,14 @@ func (p Package) validate() error {
 	}
 	for id, constraint := range p.Dependencies {
 		if id == p.ID || !packageID.MatchString(id) {
-			return fmt.Errorf("invalid dependency ID %q", id)
+			return fmt.Errorf("依赖包 ID %q 无效", id)
 		}
 		if constraint != "*" && !versionRE.MatchString(constraint) {
-			return fmt.Errorf("unsupported dependency version %q: use an exact version or *", constraint)
+			return fmt.Errorf("依赖版本 %q 不受支持，请使用精确版本或 *", constraint)
 		}
 	}
 	if p.Library != nil && p.Type != "library" {
-		return fmt.Errorf("package %s: only library packages can declare a Library contract", p.ID)
+		return fmt.Errorf("包 %s 的类型不是 library，不能声明库结构", p.ID)
 	}
 	if err := p.validateLibraryLinks(); err != nil {
 		return err
@@ -235,34 +241,34 @@ func (p Package) validate() error {
 			isSQLite := strings.HasSuffix(strings.ToLower(p.Data), ".library.db")
 			switch {
 			case p.Library != nil && !isSQLite:
-				return fmt.Errorf("Library data file must end in .library.db: %q", p.Data)
+				return fmt.Errorf("业务库数据文件 %q 须以 .library.db 结尾", p.Data)
 			case p.Library == nil && isSQLite:
-				return fmt.Errorf("SQLite Library %s must declare its library contract", p.ID)
+				return fmt.Errorf("SQLite 业务库 %s 须在清单中声明库结构", p.ID)
 			case p.Library != nil:
 				if err := p.Library.Validate(); err != nil {
-					return fmt.Errorf("invalid Library contract: %w", err)
+					return fmt.Errorf("业务库结构声明无效：%w", err)
 				}
 			}
 		}
 	case "tool", "toolplugin":
 		for name, tool := range p.Provides.Tools {
 			if err := validateProxyCapabilities(tool.ProxyCapabilities); err != nil {
-				return fmt.Errorf("tool %q: %w", name, err)
+				return fmt.Errorf("工具 %q：%w", name, err)
 			}
 			if name == "bmc" || !entryName.MatchString(name) || (tool.Scope != "global" && tool.Scope != "session") {
-				return fmt.Errorf("invalid tool name or scope: %q", name)
+				return fmt.Errorf("工具 %q 的名称或作用域无效", name)
 			}
 			switch tool.Runtime {
 			case "", "native":
 				if runtime.GOOS == "windows" && !strings.EqualFold(filepath.Ext(tool.Entry), ".exe") {
-					return fmt.Errorf("native Windows tool %q needs an .exe entry", name)
+					return fmt.Errorf("Windows 原生工具 %q 须使用 .exe 入口", name)
 				}
 			case "bash":
 				if !strings.EqualFold(filepath.Ext(tool.Entry), ".sh") {
-					return fmt.Errorf("Bash tool %q needs an .sh entry", name)
+					return fmt.Errorf("Bash 工具 %q 须使用 .sh 入口", name)
 				}
 			default:
-				return fmt.Errorf("invalid runtime %q for tool %q", tool.Runtime, name)
+				return fmt.Errorf("运行方式 %q 不适用于工具 %q", tool.Runtime, name)
 			}
 			if _, err := p.File(tool.Entry); err != nil {
 				return err
@@ -270,10 +276,13 @@ func (p Package) validate() error {
 		}
 		for name, resolver := range p.Provides.Resolvers {
 			if err := validateProxyCapabilities(resolver.ProxyCapabilities); err != nil {
-				return fmt.Errorf("resolver %q: %w", name, err)
+				return fmt.Errorf("解析器 %q：%w", name, err)
 			}
 			if name == "generic" || !entryName.MatchString(name) {
-				return fmt.Errorf("invalid resolver name %q", name)
+				return fmt.Errorf("解析器名称 %q 无效", name)
+			}
+			if err := validateStatusFields(name, resolver.StatusFields); err != nil {
+				return fmt.Errorf("解析器 %q：%w", name, err)
 			}
 			if _, err := p.File(resolver.Entry); err != nil {
 				return err
@@ -282,17 +291,37 @@ func (p Package) validate() error {
 	case "bundle":
 		for _, member := range p.Members {
 			if member == p.ID || !packageID.MatchString(member) {
-				return fmt.Errorf("invalid bundle member %q", member)
+				return fmt.Errorf("Bundle 成员 %q 无效", member)
 			}
 		}
 	default:
-		return fmt.Errorf("unknown package type %q", p.Type)
+		return fmt.Errorf("未知包类型 %q", p.Type)
 	}
 	if CanonicalType(p.Type) != "tool" && (len(p.Provides.Tools) > 0 || len(p.Provides.Resolvers) > 0) {
-		return fmt.Errorf("package %s: only toolplugins can provide commands or resolvers", p.ID)
+		return fmt.Errorf("包 %s 的类型不是 toolplugin，不能提供命令或解析器", p.ID)
 	}
 	if p.Type != "bundle" && len(p.Members) > 0 {
-		return fmt.Errorf("package %s: only bundles can declare members", p.ID)
+		return fmt.Errorf("包 %s 的类型不是 bundle，不能声明成员", p.ID)
+	}
+	return nil
+}
+
+func validateStatusFields(resolver string, fields []StatusField) error {
+	if len(fields) > 16 {
+		return fmt.Errorf("statusFields 最多可包含 16 项")
+	}
+	seen := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if !envregistry.ValidKey(field.Key) || seen[field.Key] ||
+			(field.Key != "target.model" && field.Key != "snmp.enterprises" &&
+				!strings.HasPrefix(field.Key, "oem."+resolver+".")) {
+			return fmt.Errorf("状态字段 %q 未授权或重复", field.Key)
+		}
+		if field.Label == "" || len(field.Label) > 120 || strings.TrimSpace(field.Label) != field.Label ||
+			strings.ContainsFunc(field.Label, func(r rune) bool { return !unicode.IsPrint(r) }) {
+			return fmt.Errorf("状态字段 %q 的显示名称无效", field.Key)
+		}
+		seen[field.Key] = true
 	}
 	return nil
 }
@@ -301,7 +330,7 @@ func validateProxyCapabilities(capabilities []string) error {
 	seen := make(map[string]bool, len(capabilities))
 	for _, capability := range capabilities {
 		if capability != "tcp" && capability != "udp" || seen[capability] {
-			return fmt.Errorf("invalid or repeated proxy capability %q", capability)
+			return fmt.Errorf("代理功能 %q 无效或重复", capability)
 		}
 		seen[capability] = true
 	}
@@ -310,23 +339,23 @@ func validateProxyCapabilities(capabilities []string) error {
 
 func (p Package) validateLibraryLinks() error {
 	if CanonicalType(p.Type) != "tool" && len(p.LibrarySchemas) > 0 {
-		return fmt.Errorf("package %s: only toolplugins can declare Library schema dependencies", p.ID)
+		return fmt.Errorf("包 %s 的类型不是 toolplugin，不能声明业务库结构版本依赖", p.ID)
 	}
 	for id, supported := range p.LibrarySchemas {
 		if !packageID.MatchString(id) || id == p.ID || supported.Min < 1 || supported.Max < supported.Min {
-			return fmt.Errorf("invalid Library schema dependency %q", id)
+			return fmt.Errorf("业务库结构版本依赖 %q 无效", id)
 		}
 	}
 	if p.Library == nil && len(p.LibraryMigrations) > 0 {
-		return fmt.Errorf("package %s: migrations require a Library contract", p.ID)
+		return fmt.Errorf("包 %s 须声明库结构才能提供迁移", p.ID)
 	}
 	for previous, path := range p.LibraryMigrations {
 		version, err := strconv.Atoi(previous)
 		if err != nil || strconv.Itoa(version) != previous || version < 1 || version >= p.Library.SchemaVersion {
-			return fmt.Errorf("invalid Library migration source version %q", previous)
+			return fmt.Errorf("业务库迁移的源版本 %q 无效", previous)
 		}
 		if !strings.EqualFold(filepath.Ext(path), ".sql") {
-			return fmt.Errorf("Library migration %q must be a SQL file", path)
+			return fmt.Errorf("业务库迁移文件 %q 须为 SQL 文件", path)
 		}
 		if _, err := p.File(path); err != nil {
 			return err

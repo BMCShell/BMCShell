@@ -10,10 +10,10 @@ import (
 func Query(path, id string, contract Contract, keys []string) (string, error) {
 	table := contract.lookupTable()
 	if table.Name == "" || contract.Lookup.Value == "" {
-		return "", fmt.Errorf("Library does not declare a lookup")
+		return "", fmt.Errorf("此业务库未声明查询规则")
 	}
 	if len(keys) != len(table.Keys) {
-		return "", fmt.Errorf("Library lookup requires %d key value(s): %s", len(table.Keys), strings.Join(table.Keys, ", "))
+		return "", fmt.Errorf("业务库查询需要 %d 个键值：%s", len(table.Keys), strings.Join(table.Keys, ", "))
 	}
 	db, err := OpenReadOnly(path)
 	if err != nil {
@@ -50,10 +50,10 @@ func Query(path, id string, contract Contract, keys []string) (string, error) {
 	}
 	switch len(values) {
 	case 0:
-		return "", fmt.Errorf("Library key not found")
+		return "", fmt.Errorf("未找到对应的业务库记录")
 	case 1:
 		return values[0], nil
 	default:
-		return "", fmt.Errorf("duplicate Library key")
+		return "", fmt.Errorf("业务库键值重复")
 	}
 }

@@ -1,3 +1,16 @@
+<#
+.SYNOPSIS
+    从扩展 ZIP 和下载地址生成 BMCShell 软件源索引。
+.PARAMETER ArtifactsFile
+    必填。JSON 数组文件，每项包含本地 ZIP 的 path 和下载 url。
+.PARAMETER Output
+    必填。索引 JSON 的输出路径。
+.PARAMETER Merge
+    保留已有索引中的条目，并合入新版本。
+.EXAMPLE
+    ./scripts/build-source-index.ps1 -ArtifactsFile ./artifacts.json -Output ./index.json -Merge
+#>
+
 #requires -Version 7.4
 [CmdletBinding()]
 param(
@@ -9,26 +22,26 @@ param(
 $ErrorActionPreference = 'Stop'
 $inputs = Get-Item -LiteralPath $ArtifactsFile
 $artifacts = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $inputs.FullName -Raw) -AsHashtable -NoEnumerate
-if ($artifacts -isnot [array]) { throw 'The artifacts file must be a JSON array.' }
+if ($artifacts -isnot [array]) { throw '发布文件列表必须是 JSON 数组。' }
 $destination = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
 $entries = [Collections.Generic.List[object]]::new()
 if ($Merge -and [IO.File]::Exists($destination)) {
     $index = Get-Content -LiteralPath $destination -Raw | ConvertFrom-Json -AsHashtable
-    if ($index.schema -ne 1 -or $index.packages -isnot [array]) { throw 'Invalid existing source index.' }
+    if ($index.schema -ne 1 -or $index.packages -isnot [array]) { throw '现有软件源索引格式无效。' }
     foreach ($package in $index.packages) { $entries.Add($package) }
 }
 
 foreach ($artifact in $artifacts) {
     if ($artifact.path -isnot [string] -or [string]::IsNullOrWhiteSpace($artifact.path) -or
         $artifact.url -isnot [string] -or [string]::IsNullOrWhiteSpace($artifact.url)) {
-        throw 'Each artifact needs a local path and a download URL.'
+        throw '每个发布文件必须提供本地路径和下载 URL。'
     }
     $path = [IO.Path]::GetFullPath($artifact.path, $inputs.DirectoryName)
     $archive = [IO.Compression.ZipFile]::OpenRead($path)
     try {
         $manifests = @($archive.Entries | Where-Object FullName -CEQ 'bmc-package.json')
         if ($manifests.Count -ne 1 -or $manifests[0].Length -gt 1MB) {
-            throw "Expected one bmc-package.json at the ZIP root in '$path'."
+            throw "ZIP '$path' 的根目录必须恰好包含一个 bmc-package.json。"
         }
         $reader = [IO.StreamReader]::new($manifests[0].Open())
         try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json -AsHashtable }
@@ -43,7 +56,7 @@ foreach ($artifact in $artifacts) {
         $manifest.type -cnotin 'book', 'library', 'theme', 'tool', 'toolplugin', 'bundle' -or
         $manifest.version -cnotmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z' -or
         [string]::IsNullOrWhiteSpace($manifest.name)) {
-        throw "Invalid package metadata in '$path'."
+        throw "ZIP '$path' 中的扩展包元数据无效。"
     }
     $entry = [ordered]@{
         id = $manifest.id
@@ -53,6 +66,13 @@ foreach ($artifact in $artifacts) {
         coreApi = $manifest.coreApi
         url = $artifact.url
         sha256 = $hash
+    }
+    $description = $manifest.description
+    if ($description -isnot [string] -or [string]::IsNullOrWhiteSpace($description)) {
+        $description = $manifest.summary
+    }
+    if ($description -is [string] -and -not [string]::IsNullOrWhiteSpace($description)) {
+        $entry.description = $description.Trim()
     }
     foreach ($field in 'platforms', 'dependencies', 'members', 'librarySchemas', 'libraryMigrations') {
         if ($manifest[$field]) { $entry[$field] = $manifest[$field] }
@@ -68,7 +88,7 @@ foreach ($artifact in $artifacts) {
             @($oldPlatforms | Where-Object { $_ -cin $newPlatforms }).Count -gt 0
         if (-not $overlap) { continue }
         if ($old.sha256 -ine $entry.sha256 -or ($oldPlatforms -join ',') -cne ($newPlatforms -join ',')) {
-            throw "Release $($entry.id) $($entry.version) already has a different overlapping artifact. Publish a new version."
+            throw "版本 $($entry.id) $($entry.version) 已有适用范围重叠、内容不同的发布文件。请使用新版本号发布。"
         }
         $entries.RemoveAt($i)
     }

@@ -82,7 +82,7 @@ go build -trimpath -o BMCShell-Scaffold.exe ./cmd/bmc-scaffold
 
 ## 扩展与业务库
 
-在 `bmc setting` 中配置扩展的软件源。用 `bmc plugin update` 刷新源索引，按包名和版本安装，也可以用 `bmc plugin install --file <路径>` 安装本地包。工具命令在加载适配层或建立会话时注册。
+在 `bmc setting` 中配置扩展的软件源。用 `bmc plugin update` 刷新源索引。`bmc plugin list` 查看各源缓存的全部包版本并标记已安装的版本，加 `--installed` 只查看已安装的包，加 `-d` 显示包描述。用 `bmc plugin install` 按包名和版本安装，或加 `--file` 从本地路径安装。两种方式都可一次安装多个包。工具命令在加载适配层或建立会话时注册。
 
 `bmc book <短名称>` 查看工具书目录，支持只读检索。用 `bmc library <短名称>` 查看业务库并进入交互管理。Library 升级由 `bmc plugin upgrade` 发起。框架根据本地工作库和两版发布数据计算变更，覆盖更新前备份并确认。
 
@@ -129,7 +129,7 @@ SNMP 分组登记 `snmp.enterprises` / `BMCSHELL_SNMP_ENTERPRISES`。完整 OID 
 
 程序默认使用解压根目录作为数据目录。设置 `BMCSHELL_HOME` 时使用指定的数据目录。
 
-用 `bmc update` 从主仓库的 GitHub Releases 检查新版本，或用 `bmc update --version <version>` 选择指定的新版布局发布包。使用旧版布局的 dev.4 用户首次切换时，解压新版 ZIP。要迁移旧数据，关闭旧版终端后，将旧版 `bmc doctor -d` 显示的 `Data` 目录中的内容复制到新安装根目录或指定的 `BMCSHELL_HOME`。新版可读取旧布局，并在相关写入时登记到新版布局。回到 dev.4 时使用原安装和独立的旧版数据目录。
+用 `bmc update` 从官方发行版索引选择最新的 Windows x64 发布包，或用 `bmc update --version <版本>` 选择索引里的指定版本。下载安装前会比对索引和发布校验清单，再验证 ZIP。使用旧版布局的 dev.4 用户首次切换时，解压新版 ZIP。要迁移旧数据，关闭旧版终端后，将旧版 `bmc doctor -d` 显示的 `Data` 目录中的内容复制到新安装根目录或指定的 `BMCSHELL_HOME`。新版可读取旧布局，并在相关写入时登记到新版布局。回到 dev.4 时使用原安装和独立的旧版数据目录。
 
 发行版索引记录 GitHub 已发布的框架版本。每个版本的 `channel` 为 `stable`（正式版）或 `dev`（开发版）。正式版的版本号没有预发行后缀，且 GitHub 未将其标为预发行版。`latestStable` 和 `latestDev` 分别指向两种类型中的最新版本，缺少对应类型时为 `null`。`latest` 是两种类型中版本号最高的版本。`releases` 按版本从新到旧排列，每个版本列出发布标签、时间、ZIP 和校验清单地址以及 SHA-256。索引由 GitHub Actions 刷新。[下载框架发行版索引](https://github.com/BMCShell/BMCShell/releases/download/release-index/index.json)
 
@@ -147,7 +147,7 @@ $index.releases | Select-Object version, channel, publishedAt
 
 - 启动器或 `bin/active` 损坏时，可在 PowerShell 运行仍可执行的便携版 EXE，例如 `& 'D:/Tools/BMCShell/bin/releases/3.0.0-dev.6/BMCShell.exe' update --file 'D:/Downloads/BMCShell-3.0.0-dev.6-windows-amd64.zip'`。ZIP 与校验清单放在同一个目录。
 - 如果版本目录也损坏，关闭所有 BMCShell 终端和相关进程，核对 ZIP 的 SHA256 后解压到单独目录，将原安装的 `bin` 改为一个尚未使用的备份目录名，再把解压出来的 `BMCShell/bin` 放到原安装。新终端验证失败时恢复原 `bin`。
-- 备份工作数据时，先用 `bmc doctor -d` 确认 `Data` 目录。关闭相关终端和进程后，一并备份整个数据目录。恢复先把备份复制到独立目录，用 `BMCSHELL_HOME` 指向该副本，检查 `bmc plugin list` 和关键 Library 记录，再切换实际使用的配置。登记库和它引用的发布文件、工作库必须来自同一次备份。若 dev.6 在编辑 Library 时意外退出，回退到 dev.5 前先用 dev.6 打开该库，完成待同步审计。
+- 备份工作数据时，先用 `bmc doctor -d` 确认输出中的「数据目录」。关闭相关终端和进程后，一并备份整个数据目录。恢复先把备份复制到独立目录，用 `BMCSHELL_HOME` 指向该副本，检查 `bmc plugin list --installed` 和关键 Library 记录，再切换实际使用的配置。登记库和它引用的发布文件、工作库必须来自同一次备份。若 dev.6 在编辑 Library 时意外退出，回退到 dev.5 前先用 dev.6 打开该库，完成待同步审计。
 
 ### 历史版本维护
 

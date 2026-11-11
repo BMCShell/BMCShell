@@ -26,7 +26,7 @@ func (a *app) update(args []string) error {
 	case len(args) == 2 && args[0] == "--file" && args[1] != "":
 		archivePath = args[1]
 	default:
-		return errors.New("usage: bmc update [--version <version> | --file <release ZIP>]")
+		return errors.New("框架更新参数无效。运行 bmc update --help 查看用法")
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -43,12 +43,12 @@ func (a *app) update(args []string) error {
 		client := &http.Client{Transport: proxy.HTTPTransport(address), Timeout: 90 * time.Second}
 		defer client.CloseIdleConnections()
 		ctx := context.Background()
-		available, err := release.SelectGitHub(ctx, client, requested)
+		available, err := release.SelectIndex(ctx, client, requested)
 		if err != nil {
 			return err
 		}
 		if requested == "" && catalog.CompareVersion(available.Version, a.version) <= 0 {
-			fmt.Fprintf(a.out, "BMCShell %s is current.\n", a.version)
+			fmt.Fprintf(a.out, "当前 BMCShell %s 已是最新版本。\n", a.version)
 			return nil
 		}
 		dir, err := os.MkdirTemp("", "bmcshell-core-update-")
@@ -66,9 +66,9 @@ func (a *app) update(args []string) error {
 		return err
 	}
 	if _, portable := release.PortableRoot(executable); !portable {
-		fmt.Fprintf(a.out, "BMCShell %s is ready. Source bin/bmcshell.sh from the installation in a new Bash terminal.\n", version)
+		fmt.Fprintf(a.out, "BMCShell %s 已就绪。请在新的 Bash 终端中加载安装目录的 bin/bmcshell.sh。\n", version)
 		return nil
 	}
-	fmt.Fprintf(a.out, "BMCShell %s is ready. Open a new Bash terminal to load it.\n", version)
+	fmt.Fprintf(a.out, "BMCShell %s 已就绪。请打开新的 Bash 终端加载。\n", version)
 	return nil
 }

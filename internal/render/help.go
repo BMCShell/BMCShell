@@ -9,10 +9,14 @@ import (
 type Topic struct {
 	Summary  string
 	Usage    []string
-	Options  []struct{ Name, Description, Default string }
-	Examples []struct{ Command, Description string }
+	Options  []Option
+	Examples []Example
 	Notes    []string
 }
+
+type Option struct{ Name, Description, Default string }
+
+type Example struct{ Command, Description string }
 
 func Help(out io.Writer, topic Topic, detailed bool) {
 	fmt.Fprintln(out, "说明")

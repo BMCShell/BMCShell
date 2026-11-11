@@ -72,7 +72,7 @@ func (s *Store) SyncRepairSuggestions(collect func([]Package) ([]RepairRecord, e
 	for _, item := range suggestions {
 		owner, ok := owners[item.SourceID]
 		if !ok {
-			return nil, nil, nil, fmt.Errorf("unknown repair suggestion source %q", item.SourceID)
+			return nil, nil, nil, fmt.Errorf("未知修复建议来源 %q", item.SourceID)
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO repair_suggestions (source_id, source_name, dependency, suggestion, platform, manager, package_name)

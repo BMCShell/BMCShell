@@ -38,14 +38,14 @@ func Load(root string) (Config, error) {
 		return cfg, fmt.Errorf("settings.json: %w", err)
 	}
 	if ref := cfg.DefaultResolver; ref != nil && (ref.ExtensionID == "" || ref.Export == "") {
-		return cfg, errors.New("settings.json: default resolver needs an extension ID and export")
+		return cfg, errors.New("settings.json 中的默认解析器须同时指定插件 ID 和导出名称")
 	}
 	for _, value := range []string{cfg.Proxy, cfg.ProxyPreferred} {
 		if value == "" {
 			continue
 		}
 		if address, err := ProxyAddress(value); err != nil || address != value {
-			return cfg, errors.New("settings.json: proxy addresses must be canonical 127.0.0.1:port")
+			return cfg, errors.New("settings.json 中的代理地址须使用 127.0.0.1:端口 格式")
 		}
 	}
 	return cfg, nil
@@ -66,7 +66,7 @@ func ProxyAddress(value string) (string, error) {
 			return fmt.Sprintf("127.0.0.1:%d", port), nil
 		}
 	}
-	return "", errors.New("proxy must be on, off, or 127.0.0.1:<port 1-65535>")
+	return "", errors.New("代理设置须为 on、off 或 127.0.0.1:<端口>，端口范围为 1 到 65535")
 }
 
 func Save(root string, cfg Config) error {

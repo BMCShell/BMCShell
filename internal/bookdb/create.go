@@ -39,7 +39,7 @@ PRAGMA user_version = 1;
 // Create writes a new 2.x-compatible Book database at an unused path.
 func Create(path string, entries []Entry) (err error) {
 	if !strings.HasSuffix(strings.ToLower(path), ".book.db") {
-		return fmt.Errorf("Book data file must end in .book.db: %q", path)
+		return fmt.Errorf("工具书数据文件 %q 须以 .book.db 结尾", path)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -87,7 +87,7 @@ func Create(path string, entries []Entry) (err error) {
 	for _, entry := range entries {
 		id, err := strconv.ParseInt(entry.ID, 10, 64)
 		if err != nil || id < 0 || strings.TrimSpace(entry.Title) == "" || len(entry.Body) > bodyLimit {
-			return fmt.Errorf("invalid Book entry %q", entry.ID)
+			return fmt.Errorf("工具书条目 %q 无效", entry.ID)
 		}
 		if _, err := tx.Exec("INSERT INTO entries (id, name, content) VALUES (?, ?, ?)", id, entry.Title, entry.Body); err != nil {
 			return err

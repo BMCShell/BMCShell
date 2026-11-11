@@ -7,8 +7,11 @@ type LegacyKeyValue struct {
 	Value *string `json:"value"`
 }
 
-// ImportLegacyKeyValues replaces rows in a staged key/value snapshot.
-func ImportLegacyKeyValues(path string, entries []LegacyKeyValue) error {
+// ImportLegacyKeyValues replaces rows in a staged table using the declared key and value column.
+func ImportLegacyKeyValues(path string, table Table, valueColumn string, entries []LegacyKeyValue) error {
+	if len(table.Keys) != 1 {
+		return errors.New("导入旧版业务库需要一个稳定键")
+	}
 	db, err := OpenReadWrite(path)
 	if err != nil {
 		return err
@@ -19,17 +22,18 @@ func ImportLegacyKeyValues(path string, entries []LegacyKeyValue) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM records"); err != nil {
+	target := QuoteIdentifier(table.Name)
+	if _, err := tx.Exec("DELETE FROM " + target); err != nil {
 		return err
 	}
-	insert, err := tx.Prepare("INSERT INTO records (key, value) VALUES (?, ?)")
+	insert, err := tx.Prepare("INSERT INTO " + target + " (" + quotedList([]string{table.Keys[0], valueColumn}) + ") VALUES (?, ?)")
 	if err != nil {
 		return err
 	}
 	defer insert.Close()
 	for _, entry := range entries {
 		if entry.Key == nil || entry.Value == nil {
-			return errors.New("legacy Library records need a key and a value")
+			return errors.New("旧版业务库的记录须同时包含键和值")
 		}
 		if _, err := insert.Exec(*entry.Key, *entry.Value); err != nil {
 			return err

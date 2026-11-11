@@ -28,7 +28,7 @@ var loopback = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 func proxyAddress(value string) (netip.AddrPort, error) {
 	address, err := netip.ParseAddrPort(value)
 	if err != nil || address.Addr() != loopback || address.Port() == 0 {
-		return netip.AddrPort{}, errors.New("SOCKS5 proxy must be 127.0.0.1:<port>")
+		return netip.AddrPort{}, errors.New("SOCKS5 代理地址须为 127.0.0.1:<端口>")
 	}
 	return address, nil
 }
@@ -36,7 +36,7 @@ func proxyAddress(value string) (netip.AddrPort, error) {
 func endpoint(ip string, port uint16) (netip.AddrPort, error) {
 	address, err := netip.ParseAddr(ip)
 	if err != nil || !address.Is4() || port == 0 {
-		return netip.AddrPort{}, errors.New("SOCKS5 target must be an IPv4 address with a valid port")
+		return netip.AddrPort{}, errors.New("SOCKS5 目标须为 IPv4 地址并包含有效端口")
 	}
 	return netip.AddrPortFrom(address, port), nil
 }
@@ -48,7 +48,7 @@ func ipmiEndpoint(host string, port uint16, family string) (netip.AddrPort, erro
 	case "4", "6":
 		network += family
 	default:
-		return netip.AddrPort{}, errors.New("IPMI address family must be 4 or 6")
+		return netip.AddrPort{}, errors.New("IPMI 地址族须为 4 或 6")
 	}
 	address, err := netip.ParseAddr(host)
 	if err != nil {
@@ -56,10 +56,10 @@ func ipmiEndpoint(host string, port uint16, family string) (netip.AddrPort, erro
 		defer cancel()
 		addresses, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
 		if err != nil {
-			return netip.AddrPort{}, fmt.Errorf("resolve IPMI target %q: %w", host, err)
+			return netip.AddrPort{}, fmt.Errorf("解析 IPMI 目标 %q 失败：%w", host, err)
 		}
 		if len(addresses) == 0 {
-			return netip.AddrPort{}, fmt.Errorf("no address for IPMI target %q", host)
+			return netip.AddrPort{}, fmt.Errorf("未找到 IPMI 目标 %q 的地址", host)
 		}
 		address = addresses[0]
 	}
@@ -67,7 +67,7 @@ func ipmiEndpoint(host string, port uint16, family string) (netip.AddrPort, erro
 		address = address.Unmap()
 	}
 	if address.Zone() != "" || (family == "4" && !address.Is4()) || (family == "6" && !address.Is6()) {
-		return netip.AddrPort{}, fmt.Errorf("IPMI target %q cannot be used with the requested address family over SOCKS5", host)
+		return netip.AddrPort{}, fmt.Errorf("通过 SOCKS5 连接 IPMI 目标 %q 时无法使用所选地址族", host)
 	}
 	return netip.AddrPortFrom(address, port), nil
 }
@@ -97,7 +97,7 @@ func selectNoAuth(conn io.ReadWriter) error {
 		return err
 	}
 	if method != [2]byte{5, 0} {
-		return errors.New("SOCKS5 server must accept the no-auth method")
+		return errors.New("SOCKS5 服务器须接受无需认证的连接")
 	}
 	return nil
 }
@@ -114,14 +114,14 @@ func negotiate(conn io.ReadWriter, command byte, destination netip.AddrPort) (re
 		return reply{}, err
 	}
 	if header[0] != 5 || header[2] != 0 {
-		return reply{}, errors.New("invalid SOCKS5 reply header")
+		return reply{}, errors.New("SOCKS5 响应头无效")
 	}
 	if header[1] != 0 {
 		op := "CONNECT"
 		if command == associateCommand {
 			op = "UDP ASSOCIATE"
 		}
-		return reply{}, fmt.Errorf("SOCKS5 %s failed (reply %d)", op, header[1])
+		return reply{}, fmt.Errorf("SOCKS5 %s 请求失败，响应码 %d", op, header[1])
 	}
 	return readReplyAddress(conn, header[3])
 }
@@ -140,10 +140,10 @@ func readReplyAddress(conn io.Reader, kind byte) (reply, error) {
 		}
 		size = int(length[0])
 		if size == 0 {
-			return reply{}, errors.New("empty SOCKS5 reply hostname")
+			return reply{}, errors.New("SOCKS5 响应中的主机名为空")
 		}
 	default:
-		return reply{}, errors.New("invalid SOCKS5 reply address type")
+		return reply{}, errors.New("SOCKS5 响应中的地址类型无效")
 	}
 	address := make([]byte, size+2)
 	if _, err := io.ReadFull(conn, address); err != nil {
@@ -160,7 +160,7 @@ func readReplyAddress(conn io.Reader, kind byte) (reply, error) {
 func openProxy(address netip.AddrPort, command byte, target netip.AddrPort) (*net.TCPConn, reply, error) {
 	socket, err := net.DialTimeout("tcp4", address.String(), setupTimeout)
 	if err != nil {
-		return nil, reply{}, fmt.Errorf("connect to SOCKS5 proxy %s: %w", address, err)
+		return nil, reply{}, fmt.Errorf("连接 SOCKS5 代理 %s 失败：%w", address, err)
 	}
 	control := socket.(*net.TCPConn)
 	if err := control.SetDeadline(time.Now().Add(setupTimeout)); err != nil {
@@ -205,7 +205,7 @@ func CheckCapabilities(address string, capabilities []string) error {
 	}
 	conn, err := net.DialTimeout("tcp4", addr.String(), setupTimeout)
 	if err != nil {
-		return fmt.Errorf("connect to SOCKS5 proxy %s: %w", addr, err)
+		return fmt.Errorf("连接 SOCKS5 代理 %s 失败：%w", addr, err)
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(setupTimeout)); err != nil {
@@ -215,7 +215,7 @@ func CheckCapabilities(address string, capabilities []string) error {
 }
 
 func loopbackRelay(res reply, peer netip.AddrPort) (netip.AddrPort, error) {
-	invalid := errors.New("SOCKS5 UDP relay must be reachable on local IPv4 loopback")
+	invalid := errors.New("SOCKS5 UDP 转发须可通过本机 IPv4 环回地址访问")
 	if res.port == 0 {
 		return netip.AddrPort{}, invalid
 	}
@@ -242,7 +242,7 @@ func loopbackRelay(res reply, peer netip.AddrPort) (netip.AddrPort, error) {
 func parsePort(value string) (uint16, error) {
 	port, err := strconv.ParseUint(value, 10, 16)
 	if err != nil || port == 0 {
-		return 0, errors.New("expected a port from 1 to 65535")
+		return 0, errors.New("端口范围为 1 到 65535")
 	}
 	return uint16(port), nil
 }
@@ -263,7 +263,7 @@ func parseIPMIPort(value string) (uint16, error) {
 	}
 	port, err := strconv.ParseInt(value, base, 32)
 	if err != nil || port < 0 || port > 65535 || strings.Contains(value, "_") {
-		return 0, errors.New("expected an IPMI port from 0 to 65535")
+		return 0, errors.New("IPMI 端口范围为 0 到 65535")
 	}
 	if port == 0 {
 		return defaultIPMIPort, nil

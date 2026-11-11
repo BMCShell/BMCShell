@@ -32,7 +32,7 @@ const (
 func networkURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || len(raw) > maxURLLength || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
-		return nil, errors.New("software source URLs must use HTTPS (loopback HTTP is also allowed)")
+		return nil, errors.New("软件源地址须使用 HTTPS，本机环回地址也支持 HTTP")
 	}
 	if u.Scheme == "https" {
 		return u, nil
@@ -44,7 +44,7 @@ func networkURL(raw string) (*url.URL, error) {
 			return u, nil
 		}
 	}
-	return nil, errors.New("software source URLs must use HTTPS (loopback HTTP is also allowed)")
+	return nil, errors.New("软件源地址须使用 HTTPS，本机环回地址也支持 HTTP")
 }
 
 func privateTLSOrigin(u *url.URL) netip.AddrPort {
@@ -100,7 +100,7 @@ var client = http.Client{
 	Timeout:   90 * time.Second,
 	CheckRedirect: func(req *http.Request, previous []*http.Request) error {
 		if len(previous) >= 10 || previous[len(previous)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return errors.New("unsafe software source redirect")
+			return errors.New("软件源重定向到不受支持的地址")
 		}
 		if _, err := networkURL(req.URL.String()); err != nil {
 			return err
@@ -119,7 +119,7 @@ func fetch(ctx context.Context, client *http.Client, raw string, limit int64) (i
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, errors.New("invalid software source request")
+		return nil, errors.New("软件源请求无效")
 	}
 	response, err := client.Do(req)
 	if err != nil {
@@ -127,15 +127,15 @@ func fetch(ctx context.Context, client *http.Client, raw string, limit int64) (i
 			return nil, ctx.Err()
 		}
 		// net/http errors include the complete URL, which may contain a signed query.
-		return nil, errors.New("software source request failed")
+		return nil, errors.New("请求软件源失败")
 	}
 	if response.StatusCode != http.StatusOK {
 		response.Body.Close()
-		return nil, fmt.Errorf("software source returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("软件源返回 HTTP %d", response.StatusCode)
 	}
 	if response.ContentLength > limit {
 		response.Body.Close()
-		return nil, errors.New("software source data exceeds the size limit")
+		return nil, errors.New("软件源数据超过大小限制")
 	}
 	return response.Body, nil
 }
@@ -153,7 +153,7 @@ func (s *Store) Download(ctx context.Context, entry Entry, dir string) (string, 
 			return "", err
 		}
 		if !slices.Contains(sources, entry.source) {
-			return "", errors.New("source changed before package download")
+			return "", errors.New("下载前软件源配置已变更")
 		}
 	}
 	return download(ctx, s.sourceClient(entry.source), entry, dir)
@@ -185,10 +185,10 @@ func download(ctx context.Context, client *http.Client, entry Entry, dir string)
 		return "", err
 	}
 	if size > maxArchiveBytes {
-		return "", errors.New("package ZIP exceeds the download size limit")
+		return "", errors.New("包的 ZIP 文件超过下载大小限制")
 	}
 	if !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), entry.SHA256) {
-		return "", fmt.Errorf("SHA256 mismatch for %s %s", entry.Name, entry.Version)
+		return "", fmt.Errorf("包 %s %s 的 SHA-256 校验失败", entry.Name, entry.Version)
 	}
 	if err := verifyArchive(path, entry); err != nil {
 		return "", err
@@ -203,7 +203,7 @@ func verifyArchive(path string, entry Entry) error {
 		if archive != nil {
 			archive.Close()
 		}
-		return errors.New("downloaded package is not a valid ZIP")
+		return errors.New("下载的包不是有效的 ZIP 文件")
 	}
 	defer archive.Close()
 	var manifestFile *zip.File
@@ -212,12 +212,12 @@ func verifyArchive(path string, entry Entry) error {
 			continue
 		}
 		if manifestFile != nil || file.Name != packages.ManifestFile || !file.Mode().IsRegular() {
-			return errors.New("invalid or repeated package manifest in ZIP")
+			return errors.New("ZIP 中的包清单无效或重复")
 		}
 		manifestFile = file
 	}
 	if manifestFile == nil || manifestFile.UncompressedSize64 > maxManifestBytes {
-		return errors.New("missing or oversized package manifest in ZIP")
+		return errors.New("ZIP 缺少包清单，或清单超过大小限制")
 	}
 	reader, err := manifestFile.Open()
 	if err != nil {
@@ -230,7 +230,7 @@ func verifyArchive(path string, entry Entry) error {
 	}
 	var manifest packages.Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return errors.New("invalid package manifest in ZIP")
+		return errors.New("ZIP 中的包清单无效")
 	}
 	version := 0
 	if manifest.Library != nil {
@@ -243,7 +243,7 @@ func verifyArchive(path string, entry Entry) error {
 		!maps.Equal(manifest.Dependencies, entry.Dependencies) ||
 		!maps.Equal(manifest.LibrarySchemas, entry.LibrarySchemas) ||
 		!maps.Equal(manifest.LibraryMigrations, entry.LibraryMigrations) {
-		return fmt.Errorf("ZIP manifest does not match the source index for %s %s", entry.Name, entry.Version)
+		return fmt.Errorf("包 %s %s 的 ZIP 清单与软件源索引不一致", entry.Name, entry.Version)
 	}
 	return nil
 }

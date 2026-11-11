@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"bmcshell/internal/bookdb"
 	"bmcshell/internal/packages"
@@ -27,11 +28,21 @@ func Run(version string, args []string, in io.Reader, out, errOut io.Writer) int
 		if errors.Is(err, bookdb.ErrNoMatch) {
 			return 4
 		}
-		fmt.Fprintln(errOut, "BMCShell:", err)
 		var child *exec.ExitError
-		if errors.As(err, &child) && child.ExitCode() > 0 && child.ExitCode() <= 255 {
-			return child.ExitCode()
+		if errors.As(err, &child) {
+			code := child.ExitCode()
+			status := "子进程异常终止"
+			if code >= 0 {
+				status = fmt.Sprintf("子进程退出码 %d", code)
+			}
+			message := strings.Replace(err.Error(), child.Error(), status, 1)
+			fmt.Fprintf(errOut, "BMCShell：%s\n", message)
+			if code > 0 && code <= 255 {
+				return code
+			}
+			return 1
 		}
+		fmt.Fprintf(errOut, "BMCShell：%v\n", err)
 		return 1
 	}
 	return 0
@@ -53,8 +64,16 @@ func (a *app) run(args []string) error {
 	if len(rest) == 1 && helpFlag(rest[0]) {
 		return a.help([]string{command})
 	}
-	if command == "help" && len(rest) <= 1 {
-		return a.help(rest)
+	if command == "help" {
+		if _, builtin := builtinHelp[strings.Join(rest, " ")]; len(rest) <= 1 || builtin {
+			return a.help(rest)
+		}
+	}
+	if command == "plugin" && len(rest) == 2 && helpFlag(rest[1]) {
+		if rest[0] == "help" {
+			return a.help([]string{"plugin"})
+		}
+		return a.help([]string{"plugin", rest[0]})
 	}
 
 	var err error
@@ -90,11 +109,11 @@ func (a *app) run(args []string) error {
 	case "bridge":
 		return a.bridge(rest)
 	case "use", "exit":
-		return errors.New("load bin/bmcshell.sh from an installed release or shell/bmcshell.sh from the source tree to change the current Bash session")
+		return errors.New("请先在当前 Bash 中加载安装目录的 bin/bmcshell.sh 或源码目录的 shell/bmcshell.sh，再运行此命令")
 	case "version":
-		return errors.New("bmc version does not take arguments; see bmc version --help")
+		return errors.New("bmc version 不接受参数。运行 bmc version --help 查看用法")
 	default:
-		return fmt.Errorf("unknown command %q; see bmc help", command)
+		return fmt.Errorf("未知命令 %q。运行 bmc help 查看可用命令", command)
 	}
 }
 
@@ -117,19 +136,19 @@ func dataDirectory() (string, error) {
 func (a *app) status(args []string) error {
 	showEnv := len(args) == 1 && args[0] == "--env"
 	if len(args) != 0 && !showEnv {
-		return errors.New("usage: bmc status [--env]")
+		return errors.New("bmc status 参数无效。运行 bmc status --help 查看用法")
 	}
 	ctx, err := session.Current()
 	if err != nil {
 		return err
 	}
-	if ctx == nil {
-		fmt.Fprintln(a.out, "No active BMC target.")
-		return nil
-	}
 	if showEnv {
 		return a.statusEnvironment(ctx)
 	}
+	if ctx == nil {
+		fmt.Fprintln(a.out, "尚未选中 BMC 目标。请先运行 bmc use <IP>。")
+		return nil
+	}
 	fmt.Fprintln(a.out, ctx["target.ip"])
-	return nil
+	return a.statusResolver(ctx)
 }
