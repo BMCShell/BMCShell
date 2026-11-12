@@ -84,7 +84,13 @@ func TestPluginCatalogCLI(t *testing.T) {
 			t.Fatal(err)
 		}
 		published.Store(data)
-		libraryCLI(t, 0, "", "plugin", "update")
+		var stdout, stderr strings.Builder
+		code := Run("test", []string{"plugin", "update"}, strings.NewReader(""), &stdout, &stderr)
+		if code != 0 || !strings.Contains(stdout.String(), "official：已缓存") ||
+			strings.Contains(stdout.String(), "正在刷新") ||
+			!strings.Contains(stderr.String(), "正在刷新软件源 official（1/1）") {
+			t.Fatalf("plugin update exit = %d, stdout = %q, stderr = %q", code, &stdout, &stderr)
+		}
 	}
 	libraryCLI(t, 0, "", "setting", "--set", "plugin.source.official", server.URL+"/index.json")
 	libraryCLI(t, 0, "", "setting", "--set", "plugin.source.team", server.URL+"/index.json?key=private-value")
@@ -145,7 +151,14 @@ func TestPluginInstallLocalPackages(t *testing.T) {
 	if output := libraryCLI(t, 0, "", "plugin", "list", "--installed"); output != "" {
 		t.Fatalf("failed staging left installed packages: %q", output)
 	}
-	output := libraryCLI(t, 0, "", "plugin", "install", "--file", toolDir, themeZip)
+	var stdout, stderr strings.Builder
+	code := Run("test", []string{"plugin", "install", "--file", toolDir, themeZip}, strings.NewReader(""), &stdout, &stderr)
+	output := stdout.String()
+	if code != 0 || strings.Contains(output, "正在") ||
+		!strings.Contains(stderr.String(), "正在检查 2 个本地扩展包或目录") ||
+		!strings.Contains(stderr.String(), "正在应用 2 项扩展包变更") {
+		t.Fatalf("local install exit = %d, stdout = %q, stderr = %q", code, &stdout, &stderr)
+	}
 	for _, p := range []packages.Manifest{tool, theme} {
 		if !strings.Contains(output, "已安装 "+p.Name+" "+p.Version) {
 			t.Fatalf("missing install output for %s: %q", p.Name, output)

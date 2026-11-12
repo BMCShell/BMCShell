@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -54,7 +55,7 @@ func TestInstallRejectsUnsafeArchiveWithoutChangingActiveRelease(t *testing.T) {
 			dir := t.TempDir()
 			archivePath := filepath.Join(dir, "release.zip")
 			writeReleaseFixture(t, archivePath, tc.entry, tc.valid)
-			if _, err := Install(executable, archivePath); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := Install(executable, archivePath, io.Discard); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Install() error = %v, want %q", err, tc.want)
 			}
 			data, err := os.ReadFile(marker)

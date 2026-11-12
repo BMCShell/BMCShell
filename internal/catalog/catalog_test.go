@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"bmcshell/internal/packages"
 )
@@ -108,6 +110,50 @@ func TestRefreshAndDownload(t *testing.T) {
 	}
 	if sources, err := store.Sources(); err != nil || len(sources) != 0 {
 		t.Fatalf("removed source still present: %+v, %v", sources, err)
+	}
+}
+
+func TestNetworkTimeoutPreservesErrorAndCleansUp(t *testing.T) {
+	const privateQuery = "token=private-value"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/artifact.zip" {
+			_, _ = w.Write([]byte("partial ZIP"))
+			w.(http.Flusher).Flush()
+		}
+		<-req.Context().Done()
+	}))
+	defer server.Close()
+
+	store := Open(t.TempDir())
+	store.client.Timeout = 100 * time.Millisecond
+	source := Source{Name: "official", Official: true, URL: server.URL + "/index.json?" + privateQuery}
+	if err := store.SetSource(source); err != nil {
+		t.Fatal(err)
+	}
+	checkTimeout := func(err error) {
+		t.Helper()
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "超时") || strings.Contains(err.Error(), privateQuery) {
+			t.Fatalf("timeout error = %v", err)
+		}
+	}
+	_, err := store.Refresh(t.Context(), "")
+	checkTimeout(err)
+	entries, err := store.CachedEntries(source)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("timeout populated the cache: %v, %v", entries, err)
+	}
+
+	stage := t.TempDir()
+	entry := Entry{
+		ID: "9045a80b-d55f-48d0-849b-c19bb02b3056", Name: "bmcshell-book-fixture",
+		Type: "book", Version: "1.0.0", CoreAPI: 1, Platforms: []string{"any"},
+		URL: server.URL + "/artifact.zip?" + privateQuery, SHA256: strings.Repeat("0", 64),
+	}
+	_, err = store.Download(t.Context(), entry, stage)
+	checkTimeout(err)
+	files, err := os.ReadDir(stage)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("timeout left files in the staging directory: %v, %v", files, err)
 	}
 }
 

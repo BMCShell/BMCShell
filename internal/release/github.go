@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"bmcshell/internal/catalog"
+	"bmcshell/internal/httpretry"
 	"bmcshell/internal/packages"
 )
 
@@ -65,13 +66,17 @@ func githubClient(client *http.Client) *http.Client {
 
 // SelectIndex reads the public core release index without downloading the selected assets.
 func SelectIndex(ctx context.Context, client *http.Client, version string) (GitHubRelease, error) {
+	return SelectIndexWithProgress(ctx, client, version, nil)
+}
+
+func SelectIndexWithProgress(ctx context.Context, client *http.Client, version string, progress io.Writer) (GitHubRelease, error) {
 	if version != "" {
 		version = strings.TrimPrefix(version, "v")
 		if err := packages.ValidateVersion(version); err != nil {
 			return GitHubRelease{}, err
 		}
 	}
-	index, err := fetchReleaseIndex(ctx, githubClient(client))
+	index, err := fetchReleaseIndex(ctx, githubClient(client), progress)
 	if err != nil {
 		return GitHubRelease{}, err
 	}
@@ -97,18 +102,15 @@ func SelectIndex(ctx context.Context, client *http.Client, version string) (GitH
 	return GitHubRelease{}, errors.New("框架发行版索引中没有 Windows x64 发布包")
 }
 
-func fetchReleaseIndex(ctx context.Context, client *http.Client) (releaseIndex, error) {
+func fetchReleaseIndex(ctx context.Context, client *http.Client, progress io.Writer) (releaseIndex, error) {
 	var index releaseIndex
-	response, err := githubGet(ctx, client, coreReleaseIndex)
-	if err != nil {
-		return index, fmt.Errorf("读取框架发行版索引失败：%w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return index, fmt.Errorf("读取框架发行版索引失败，HTTP %d", response.StatusCode)
-	}
+	var data []byte
 	const maxIndexBytes = 8 << 20
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxIndexBytes+1))
+	err := githubGet(ctx, client, coreReleaseIndex, maxIndexBytes, progress, "框架发行版索引", func(body io.Reader) error {
+		var err error
+		data, err = io.ReadAll(io.LimitReader(body, maxIndexBytes+1))
+		return err
+	})
 	if err != nil {
 		return index, fmt.Errorf("读取框架发行版索引失败：%w", err)
 	}
@@ -158,12 +160,16 @@ func indexedAssetURL(address, tag, filename string) bool {
 }
 
 // Download retrieves the selected assets into a private staging directory.
-func (r GitHubRelease) Download(ctx context.Context, client *http.Client, directory string) (string, error) {
+func (r GitHubRelease) Download(ctx context.Context, client *http.Client, directory string, progress io.Writer) (string, error) {
 	client = githubClient(client)
+	if progress == nil {
+		progress = io.Discard
+	}
 	archive := filepath.Join(directory, r.archiveName)
 	manifestPath := strings.TrimSuffix(archive, ".zip") + ".manifest.json"
-	if _, err := saveGitHubAsset(ctx, client, r.manifestURL, manifestPath, maxManifestBytes); err != nil {
-		return "", err
+	fmt.Fprintln(progress, "正在下载发布校验清单…")
+	if _, err := saveGitHubAsset(ctx, client, r.manifestURL, manifestPath, maxManifestBytes, progress, "框架发布校验清单"); err != nil {
+		return "", fmt.Errorf("下载发布校验清单失败：%w", err)
 	}
 	manifest, err := readManifest(archive)
 	if err != nil {
@@ -172,9 +178,10 @@ func (r GitHubRelease) Download(ctx context.Context, client *http.Client, direct
 	if manifest.Version != r.Version || !strings.EqualFold(manifest.SHA256, r.sha256) {
 		return "", errors.New("发布校验清单的版本或 SHA-256 与框架发行版索引不一致")
 	}
-	size, err := saveGitHubAsset(ctx, client, r.archiveURL, archive, r.bytes)
+	fmt.Fprintf(progress, "正在下载框架发布包 %s（%.1f MiB）…\n", r.archiveName, float64(r.bytes)/(1<<20))
+	size, err := saveGitHubAsset(ctx, client, r.archiveURL, archive, r.bytes, progress, "框架发布 ZIP")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("下载框架发布包失败：%w", err)
 	}
 	if size != r.bytes {
 		return "", errors.New("发布 ZIP 的大小与框架发行版索引不一致")
@@ -194,43 +201,39 @@ func githubReleaseURL(u *url.URL) bool {
 	}
 }
 
-func githubGet(ctx context.Context, client *http.Client, address string) (*http.Response, error) {
+func githubGet(ctx context.Context, client *http.Client, address string, limit int64, progress io.Writer, label string, consume func(io.Reader) error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil || !githubReleaseURL(req.URL) {
-		return nil, errors.New("GitHub 发布地址无效")
+		return errors.New("GitHub 发布地址无效")
 	}
 	req.Header.Set("User-Agent", "BMCShell")
-	response, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, errors.New("请求 GitHub 发布文件失败")
-	}
-	return response, nil
+	return httpretry.Get(client, req, limit, progress, label, consume)
 }
 
-func saveGitHubAsset(ctx context.Context, client *http.Client, address, path string, limit int64) (int64, error) {
-	response, err := githubGet(ctx, client, address)
-	if err != nil {
-		return 0, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("GitHub 发布文件的下载请求返回 HTTP %d", response.StatusCode)
-	}
-	if response.ContentLength > limit {
-		return 0, errors.New("GitHub 发布文件超过大小限制")
-	}
+func saveGitHubAsset(ctx context.Context, client *http.Client, address, path string, limit int64, progress io.Writer, label string) (int64, error) {
+	var size int64
+	err := githubGet(ctx, client, address, limit, progress, label, func(body io.Reader) error {
+		var err error
+		size, err = writeGitHubAsset(body, path, limit)
+		return err
+	})
+	return size, err
+}
+
+func writeGitHubAsset(body io.Reader, path string, limit int64) (int64, error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return 0, err
 	}
-	size, copyErr := io.Copy(file, io.LimitReader(response.Body, limit+1))
+	size, copyErr := io.Copy(file, io.LimitReader(body, limit+1))
 	if err := errors.Join(copyErr, file.Close()); err != nil {
+		if removeErr := os.Remove(path); removeErr != nil {
+			return 0, fmt.Errorf("无法清理未完成的下载：%w", removeErr)
+		}
 		return 0, err
 	}
 	if size > limit {
+		_ = os.Remove(path)
 		return 0, errors.New("GitHub 发布文件超过大小限制")
 	}
 	return size, nil

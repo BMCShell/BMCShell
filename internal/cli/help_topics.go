@@ -44,7 +44,7 @@ var builtinHelp = map[string]render.Topic{
 		Summary: "检查框架、已安装扩展包和外部命令依赖。",
 		Usage:   []string{"bmc doctor [-d|--detail] [-f|--filter <ok|missing>] [-a|--auto]"},
 		Options: []render.Option{
-			{Name: "-d, --detail", Description: "显示版本、数据目录、依赖路径及修复建议。兼容旧拼写 --detial。"},
+			{Name: "-d, --detail", Description: "显示版本、数据目录、依赖路径及修复建议。"},
 			{Name: "-f, --filter <ok|missing>", Description: "筛选正常项（ok）或缺失和损坏项（missing）。", Default: "显示所有检查结果"},
 			{Name: "-a, --auto", Description: "在交互式 MSYS2 Bash 中选择并安装支持自动修复的依赖。"},
 		},
@@ -82,7 +82,7 @@ var builtinHelp = map[string]render.Topic{
 		Usage: []string{
 			"bmc plugin list [-i|--installed] [-d|--detail] [类型]",
 			"bmc plugin update",
-			"bmc plugin search <关键词>",
+			"bmc plugin search <关键词> [-d|--detail]",
 			"bmc plugin install <包名[@版本]> [<包名[@版本]>...]",
 			"bmc plugin install --file <发布包路径> [<发布包路径>...]",
 			"bmc plugin upgrade [包名或 UUID]",
@@ -100,11 +100,11 @@ var builtinHelp = map[string]render.Topic{
 		Usage:   []string{"bmc plugin list [-i|--installed] [-d|--detail] [类型]"},
 		Options: []render.Option{
 			{Name: "-i, --installed", Description: "只列出本机已安装的包。", Default: "列出缓存索引和本机已安装的包"},
-			{Name: "-d, --detail", Description: "额外显示包描述。兼容旧拼写 --detial。"},
+			{Name: "-d, --detail", Description: "以表格显示包类型、来源、核心 API、平台、UUID 和描述。"},
 			{Name: "<类型>", Description: "筛选 book、library、theme、tool 或 bundle。"},
 		},
 		Examples: []render.Example{
-			{Command: "bmc plugin list --installed --detail tool", Description: "查看已安装的工具扩展包及其描述。"},
+			{Command: "bmc plugin list --installed --detail tool", Description: "以表格查看已安装的工具扩展包。"},
 		},
 	},
 	"plugin update": {
@@ -113,16 +113,18 @@ var builtinHelp = map[string]render.Topic{
 		Examples: []render.Example{
 			{Command: "bmc plugin update", Description: "刷新索引后即可搜索或升级扩展包。"},
 		},
-		Notes: []string{"使用 bmc setting 查看或配置软件源。"},
+		Notes: []string{"使用 bmc setting 查看或配置软件源。每次联网请求最多等待 5 分钟，遇到临时网络错误最多重试两次。刷新失败时保留上次有效的索引。进度写入标准错误。"},
 	},
 	"plugin search": {
 		Summary: "在缓存索引中按包名搜索扩展包。",
-		Usage:   []string{"bmc plugin search <关键词>"},
+		Usage:   []string{"bmc plugin search <关键词> [-d|--detail]"},
 		Options: []render.Option{
-			{Name: "<关键词>", Description: "按包名做不区分大小写的子串匹配。每个包显示最新版本。"},
+			{Name: "<关键词>", Description: "按包名做不区分大小写的子串匹配。每个包显示最新兼容版本。"},
+			{Name: "-d, --detail", Description: "以表格显示匹配包的完整信息。"},
 		},
 		Examples: []render.Example{
 			{Command: "bmc plugin search redfish", Description: "查找包名包含 redfish 的扩展包。"},
+			{Command: "bmc plugin search redfish --detail", Description: "以表格查看匹配的扩展包。"},
 		},
 	},
 	"plugin install": {
@@ -140,7 +142,7 @@ var builtinHelp = map[string]render.Topic{
 			{Command: "bmc plugin install --file './sbmc-book-redfish@1.0.0.zip'", Description: "从当前目录的发布 ZIP 安装。"},
 			{Command: "bmc plugin install --file .", Description: "在扩展包目录中安装当前包。"},
 		},
-		Notes: []string{"从软件源安装前可运行 bmc plugin update 刷新索引。"},
+		Notes: []string{"从软件源安装前可运行 bmc plugin update 刷新索引。每次下载请求最多等待 5 分钟，遇到临时网络错误最多重试两次。安装进度写入标准错误。"},
 	},
 	"plugin upgrade": {
 		Summary: "从软件源升级已安装的扩展包。",
@@ -151,7 +153,7 @@ var builtinHelp = map[string]render.Topic{
 		Examples: []render.Example{
 			{Command: "bmc plugin upgrade sbmc-book-redfish", Description: "升级已安装的 Redfish 工具书。"},
 		},
-		Notes: []string{"交互终端会先显示升级计划，确认后应用。"},
+		Notes: []string{"交互终端会先显示升级计划，确认后应用。每次下载请求最多等待 5 分钟，遇到临时网络错误最多重试两次。升级进度写入标准错误。"},
 	},
 	"plugin remove": {
 		Summary: "按包名或 UUID 卸载已安装的扩展包。",
@@ -238,7 +240,7 @@ var builtinHelp = map[string]render.Topic{
 		Examples: []render.Example{
 			{Command: "bmc update", Description: "读取官方发行版索引并应用可用更新。"},
 		},
-		Notes: []string{"联网更新读取官方发行版索引，按索引中的地址下载并校验发布包。更新完成后打开新的 Bash 终端。扩展包使用 bmc plugin upgrade 更新。"},
+		Notes: []string{"联网更新读取官方发行版索引，按索引中的地址下载并校验发布包。每次请求最多等待 5 分钟，遇到临时网络错误最多重试两次。更新进度写入标准错误。更新完成后打开新的 Bash 终端。扩展包使用 bmc plugin upgrade 更新。"},
 	},
 	"use": {
 		Summary: "在当前 Bash 中选择 BMC 目标并启动设备会话。",

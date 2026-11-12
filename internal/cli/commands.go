@@ -34,9 +34,7 @@ func (a *app) plugin(args []string) error {
 			return a.pluginUpdate()
 		}
 	case "search":
-		if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
-			return a.pluginSearch(args[0])
-		}
+		return a.searchPlugins(args)
 	case "install":
 		if len(args) > 1 && args[0] == "--file" {
 			return a.installLocalPackages(args[1:], bufio.NewReader(a.in), terminalInput(a.in))
@@ -141,7 +139,7 @@ func (a *app) listPlugins(args []string) error {
 		switch {
 		case !installedOnly && (arg == "-i" || arg == "--installed"):
 			installedOnly = true
-		case !detail && (arg == "-d" || arg == "--detial" || arg == "--detail"):
+		case !detail && pluginDetailFlag(arg):
 			detail = true
 		case kind == "" && packages.ValidType(arg):
 			kind = arg

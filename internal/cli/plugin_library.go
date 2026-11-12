@@ -40,6 +40,7 @@ type libraryAuditChange struct {
 }
 
 func (a *app) installLocalPackages(paths []string, input *bufio.Reader, interactive bool) error {
+	a.pluginProgress("正在检查 %d 个本地扩展包或目录…", len(paths))
 	installed, err := a.store.List()
 	if err != nil {
 		return err
@@ -98,6 +99,7 @@ func (a *app) commitCatalogPlan(plan *packages.Upgrade, input *bufio.Reader, int
 		if next.Library == nil {
 			continue
 		}
+		a.pluginProgress("正在准备业务库 %s@%s…", next.Name, next.Version)
 		unlock, err := a.lockLibrary(next.ID)
 		if err != nil {
 			return err
@@ -115,6 +117,7 @@ func (a *app) commitCatalogPlan(plan *packages.Upgrade, input *bufio.Reader, int
 	for _, state := range states {
 		activations = append(activations, state.activation)
 	}
+	a.pluginProgress("正在应用 %d 项扩展包变更…", len(changed))
 	return a.store.CommitChangesWithLibraries(plan, activations, func() error {
 		for _, state := range states {
 			if state.before != nil {

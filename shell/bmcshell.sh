@@ -68,6 +68,14 @@ _bmcshell_call() (
     else
         builtin export BMCSHELL_BRIDGE_INTERACTIVE=0
     fi
+    builtin unset BMCSHELL_BRIDGE_PLUGIN_COLUMNS
+    if [[ ${1-} == plugin && ( ${2-} == list || ${2-} == search ) && -t 1 && ${TERM-} != dumb ]]; then
+        local size width
+        size=$(command stty size 2>/dev/null </dev/tty) || size=
+        width=${size##* }
+        [[ $width =~ ^[1-9][0-9]*$ ]] || width=${COLUMNS:-80}
+        builtin export "BMCSHELL_BRIDGE_PLUGIN_COLUMNS=$width"
+    fi
     if [[ ${1-} == book ]]; then
         builtin unset BMCSHELL_BOOK_TTY BMCSHELL_BOOK_STTY BMCSHELL_BOOK_BASH
         if [[ -t 0 && -t 1 ]] && command -v cygpath >/dev/null; then
@@ -467,7 +475,7 @@ _bmcshell_complete() {
         words='-h --help'
         case $command in
             help) words=$commands ;;
-            doctor) words+=' -d --detail --detial -f --filter -a --auto' ;;
+            doctor) words+=' -d --detail -f --filter -a --auto' ;;
             tool)
                 if (( COMP_CWORD == 2 )); then
                     words+=' -l --list -a --all'
@@ -487,16 +495,24 @@ _bmcshell_complete() {
                 if (( COMP_CWORD == 2 )); then
                     words+=' list update search install upgrade remove'
                 elif [[ ${COMP_WORDS[2]} == list ]]; then
-                    local installed_options=' -i --installed' detail_options=' -d --detail --detial'
+                    local installed_options=' -i --installed' detail_options=' -d --detail'
                     local plugin_types=' book library theme tool bundle' index
                     for (( index = 3; index < COMP_CWORD; index++ )); do
                         case ${COMP_WORDS[index]} in
                             -i|--installed) installed_options= ;;
-                            -d|--detial|--detail) detail_options= ;;
+                            -d|--detail) detail_options= ;;
                             book|library|theme|tool|bundle) plugin_types= ;;
                         esac
                     done
                     words+="$installed_options$detail_options$plugin_types"
+                elif [[ ${COMP_WORDS[2]} == search ]]; then
+                    local detail_options=' -d --detail' index
+                    for (( index = 3; index < COMP_CWORD; index++ )); do
+                        case ${COMP_WORDS[index]} in
+                            -d|--detail) detail_options=; break ;;
+                        esac
+                    done
+                    words+="$detail_options"
                 elif [[ $previous == install ]]; then
                     words+=' --file'
                 fi

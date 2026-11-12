@@ -90,7 +90,7 @@ func TestPluginListInventory(t *testing.T) {
 		installed + "\t工具 描述", otherPlatform + "\t-", otherAPI + "\t-", oldVersion + "\t历史 版本 说明",
 		team + "\t-", localRow + "\t本地 主题", "",
 	}, "\n")
-	if got := libraryCLI(t, 0, "", "plugin", "list", "--detial"); got != detailed {
+	if got := libraryCLI(t, 0, "", "plugin", "list", "--detail"); got != detailed {
 		t.Fatalf("detailed list = %q", got)
 	}
 	if got := libraryCLI(t, 0, "", "plugin", "list", "tool"); got != official+team+"\n" {
@@ -99,6 +99,19 @@ func TestPluginListInventory(t *testing.T) {
 	if got := libraryCLI(t, 0, "", "plugin", "list", "--installed", "-d", "theme"); got != "theme\t"+localName+"\t1.0.0\t本地 主题\n" {
 		t.Fatalf("detailed installed theme list = %q", got)
 	}
+	for _, flag := range []string{"-d", "--detail"} {
+		got := libraryCLI(t, 0, "", "plugin", "search", name, flag)
+		if !strings.Contains(got, installed+"\t工具 描述") || strings.Contains(got, "@1.2.0") {
+			t.Fatalf("detailed search with %s = %q", flag, got)
+		}
+	}
+	if got := libraryCLI(t, 0, "", "plugin", "search", "--detail", name); !strings.Contains(got, id) {
+		t.Fatalf("search with option before keyword = %q", got)
+	}
+	libraryCLI(t, 1, "", "plugin", "search", "--detail")
+	libraryCLI(t, 1, "", "plugin", "search", name, "-d", "--detail")
+	libraryCLI(t, 1, "", "plugin", "list", "--detial")
+	libraryCLI(t, 1, "", "plugin", "search", name, "--detial")
 	libraryCLI(t, 1, "", "plugin", "catalog")
 
 	libraryCLI(t, 0, "", "setting", "--set", "plugin.source.team", server.URL+"/changed")
@@ -117,5 +130,20 @@ func TestPluginListInventory(t *testing.T) {
 	libraryCLI(t, 0, "", "setting", "--reset", "plugin.source.official")
 	if got := libraryCLI(t, 1, "", "plugin", "list"); got != installed+"\n"+localRow+"\n" {
 		t.Fatalf("removed source hid an installed package: %q", got)
+	}
+}
+
+func TestCompactPluginDisplay(t *testing.T) {
+	var output bytes.Buffer
+	display := newPluginDisplay(&output, pluginIndexedView, 28, true, false)
+	entry := catalog.Entry{Name: "fixture-tool-demo", Version: "1.0.0"}
+	display.row(entry, true, "显示\t当前\n设备\x1b")
+	display.row(entry, false)
+	want := "\x1b[1;96mfixture-tool-demo@1.0.0 [已安装]\x1b[0m\n" +
+		"\x1b[90m  显示 当前 设备\x1b[0m\n" +
+		"\x1b[1;96mfixture-tool-demo@1.0.0\x1b[0m\n" +
+		"\x1b[90m  暂无描述\x1b[0m\n"
+	if output.String() != want {
+		t.Fatalf("compact display = %q, want %q", output.String(), want)
 	}
 }

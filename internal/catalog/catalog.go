@@ -156,6 +156,11 @@ func (s *Store) ResetSources() error {
 }
 
 func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, error) {
+	return s.RefreshWithProgress(ctx, name, nil)
+}
+
+// RefreshWithProgress reports source refresh and retry progress.
+func (s *Store) RefreshWithProgress(ctx context.Context, name string, progress io.Writer) ([]RefreshResult, error) {
 	sources, err := s.Sources()
 	if err != nil {
 		return nil, err
@@ -171,11 +176,17 @@ func (s *Store) Refresh(ctx context.Context, name string) ([]RefreshResult, erro
 	}
 	var results []RefreshResult
 	var failures []error
-	for _, source := range sources {
-		count, err := s.refreshSource(ctx, source)
+	for i, source := range sources {
+		if progress != nil {
+			fmt.Fprintf(progress, "正在刷新软件源 %s（%d/%d）…\n", source.Name, i+1, len(sources))
+		}
+		count, err := s.refreshSource(ctx, source, progress)
 		results = append(results, RefreshResult{Source: source.Name, Count: count, Err: err})
 		if err != nil {
 			failures = append(failures, fmt.Errorf("软件源 %s：%w", source.Name, err))
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	}
 	return results, errors.Join(failures...)
@@ -187,13 +198,13 @@ type cachedIndex struct {
 	InsecureTLS bool   `json:"insecureTls,omitempty"`
 }
 
-func (s *Store) refreshSource(ctx context.Context, source Source) (int, error) {
-	response, err := fetch(ctx, s.sourceClient(source), source.URL, maxIndexBytes)
-	if err != nil {
-		return 0, err
-	}
-	defer response.Close()
-	data, err := readLimited(response, maxIndexBytes)
+func (s *Store) refreshSource(ctx context.Context, source Source, progress io.Writer) (int, error) {
+	var data []byte
+	err := fetch(ctx, s.sourceClient(source), source.URL, maxIndexBytes, progress, "软件源 "+source.Name, func(body io.Reader) error {
+		var err error
+		data, err = readLimited(body, maxIndexBytes)
+		return err
+	})
 	if err != nil {
 		return 0, err
 	}

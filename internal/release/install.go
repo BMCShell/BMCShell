@@ -63,7 +63,7 @@ func CheckInstallation(executable string) error {
 
 // Install verifies the full release before publishing a versioned payload and
 // selecting it for new shells. Existing releases and runtime data are retained.
-func Install(executable, archivePath string) (string, error) {
+func Install(executable, archivePath string, progress io.Writer) (string, error) {
 	install, err := installationRoot(executable)
 	if err != nil {
 		return "", err
@@ -82,6 +82,7 @@ func Install(executable, archivePath string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(stage)
+	fmt.Fprintln(progress, "正在校验 SHA-256、解压框架发布包并检查可执行文件…")
 	if err := unpackVerified(archivePath, m, stage); err != nil {
 		return "", err
 	}
@@ -98,6 +99,7 @@ func Install(executable, archivePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fmt.Fprintf(progress, "正在安装并启用 BMCShell %s…\n", m.Version)
 	history := planActivation(bin, verifiedRelease{Version: m.Version, Digest: digest})
 	if err := publishRelease(payload, filepath.Join(releases, m.Version)); err != nil {
 		return "", err

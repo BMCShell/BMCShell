@@ -1,12 +1,67 @@
 package render
 
 import (
+	"io"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	extast "github.com/yuin/goldmark/extension/ast"
 )
+
+// TextTable writes one wrapped row at a time. An empty table produces no output.
+type TextTable struct {
+	out      io.Writer
+	headings []string
+	widths   []int
+	started  bool
+}
+
+// NewTextTable fits the headings and preferred cell widths to the terminal width.
+func NewTextTable(out io.Writer, width int, headings []string, preferredWidths []int) *TextTable {
+	widths := make([]int, len(headings))
+	for i, heading := range headings {
+		for line := range strings.SplitSeq(heading, "\n") {
+			widths[i] = max(widths[i], textWidth(line))
+		}
+		if i < len(preferredWidths) {
+			widths[i] = max(widths[i], preferredWidths[i])
+		}
+	}
+	fitColumns(widths, width-3*len(widths)-1)
+	return &TextTable{out: out, headings: append([]string(nil), headings...), widths: widths}
+}
+
+// Row writes the heading on the first call and separates subsequent entries.
+func (table *TextTable) Row(cells []string) {
+	if table.out == nil || len(table.widths) == 0 {
+		return
+	}
+	var row strings.Builder
+	if !table.started {
+		writeBorder(&row, table.widths, "┌", "┬", "┐")
+		writeTableRow(&row, table.headings, table.widths, nil)
+		table.started = true
+	}
+	writeBorder(&row, table.widths, "├", "┼", "┤")
+	writeTableRow(&row, cells, table.widths, nil)
+	io.WriteString(table.out, row.String())
+}
+
+// Close writes the bottom border after the last row.
+func (table *TextTable) Close() {
+	if table.out != nil && table.started {
+		var border strings.Builder
+		writeBorder(&border, table.widths, "└", "┴", "┘")
+		io.WriteString(table.out, border.String())
+	}
+	table.out = nil
+}
+
+// WrapText breaks text at terminal cell boundaries and preserves explicit newlines.
+func WrapText(value string, width int) []string {
+	return wrapCell(value, max(2, width))
+}
 
 func (body markdownBody) table(table *extast.Table, width int) string {
 	widths := make([]int, len(table.Alignments))
@@ -90,9 +145,9 @@ func writeBorder(out *strings.Builder, widths []int, left, middle, right string)
 }
 
 func writeTableRow(out *strings.Builder, cells []string, widths []int, alignments []extast.Alignment) {
-	wrapped := make([][]string, len(cells))
+	wrapped := make([][]string, len(widths))
 	height := 1
-	for i, cell := range cells {
+	for i, cell := range cells[:min(len(cells), len(widths))] {
 		wrapped[i] = wrapCell(cell, widths[i])
 		height = max(height, len(wrapped[i]))
 	}
@@ -105,11 +160,13 @@ func writeTableRow(out *strings.Builder, cells []string, widths []int, alignment
 			}
 			gap := widths[column] - textWidth(value)
 			left := 0
-			switch alignments[column] {
-			case extast.AlignCenter:
-				left = gap / 2
-			case extast.AlignRight:
-				left = gap
+			if column < len(alignments) {
+				switch alignments[column] {
+				case extast.AlignCenter:
+					left = gap / 2
+				case extast.AlignRight:
+					left = gap
+				}
 			}
 			out.WriteString(strings.Repeat(" ", 1+left))
 			out.WriteString(value)

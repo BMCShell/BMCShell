@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -78,10 +79,15 @@ func TestSelectIndexAndDownload(t *testing.T) {
 			if len(requests) != 1 || requests[0] != coreReleaseIndex {
 				t.Fatalf("selection requests = %v", requests)
 			}
-			archive, err := selected.Download(ctx, client, t.TempDir())
+			var progress strings.Builder
+			archive, err := selected.Download(ctx, client, t.TempDir(), &progress)
 			asset := tc.want.Artifacts[0]
 			if err != nil || filepath.Base(archive) != filepath.Base(asset.URL) {
 				t.Fatalf("archive = %q: %v", archive, err)
+			}
+			if !strings.Contains(progress.String(), "正在下载发布校验清单") ||
+				!strings.Contains(progress.String(), "正在下载框架发布包 "+filepath.Base(asset.URL)) {
+				t.Fatalf("missing download stages: %q", progress.String())
 			}
 			if len(requests) != 3 || requests[1] != asset.ManifestURL || requests[2] != asset.URL {
 				t.Fatalf("download requests = %v", requests)
@@ -131,7 +137,52 @@ func TestIndexDownloadChecksManifestDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selected.Download(ctx, client, t.TempDir()); err == nil || !strings.Contains(err.Error(), "SHA-256") || len(requests) != 2 {
+	if _, err := selected.Download(ctx, client, t.TempDir(), io.Discard); err == nil || !strings.Contains(err.Error(), "SHA-256") || len(requests) != 2 {
 		t.Fatalf("err = %v, requests = %v", err, requests)
+	}
+}
+
+func TestReleaseTimeoutIdentifiesStage(t *testing.T) {
+	item := indexFixture("3.0.0-dev.10", "v3.0.0-dev.10")
+	asset := item.Artifacts[0]
+	sidecar, err := json.Marshal(manifest{
+		Schema: 1, Product: "BMCShell", Version: item.Version, Platform: windowsAMD64,
+		Artifact: filepath.Base(asset.URL), SHA256: asset.SHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, url, want string }{
+		{"before index response", coreReleaseIndex, "读取框架发行版索引失败"},
+		{"while reading manifest", asset.ManifestURL, "下载发布校验清单失败"},
+		{"while reading ZIP", asset.URL, "下载框架发布包失败"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bodies := map[string]string{coreReleaseIndex: indexJSON(t, item), asset.ManifestURL: string(sidecar)}
+			client := &http.Client{Transport: releaseTransport(func(req *http.Request) (*http.Response, error) {
+				address := req.URL.String()
+				if address == tc.url {
+					if address == coreReleaseIndex {
+						return nil, context.DeadlineExceeded
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK, ContentLength: -1,
+						Body: io.NopCloser(iotest.ErrReader(context.DeadlineExceeded)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(bodies[address])),
+				}, nil
+			})}
+			ctx := context.Background()
+			selected, err := SelectIndex(ctx, client, "")
+			if err == nil {
+				_, err = selected.Download(ctx, client, t.TempDir(), io.Discard)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "网络请求超时") {
+				t.Fatalf("timeout = %v, want stage %q and a localized timeout", err, tc.want)
+			}
+		})
 	}
 }

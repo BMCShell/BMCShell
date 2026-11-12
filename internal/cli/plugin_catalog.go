@@ -14,36 +14,24 @@ import (
 	"bmcshell/internal/packages"
 )
 
+func (a *app) pluginProgress(format string, args ...any) {
+	if a.errOut != nil {
+		fmt.Fprintf(a.errOut, format+"\n", args...)
+	}
+}
+
 func (a *app) pluginUpdate() error {
 	repository, err := a.catalog()
 	if err != nil {
 		return err
 	}
-	results, err := repository.Refresh(context.Background(), "")
+	results, err := repository.RefreshWithProgress(context.Background(), "", a.errOut)
 	for _, result := range results {
 		if result.Err == nil {
 			fmt.Fprintf(a.out, "%s：已缓存 %d 个包版本\n", result.Source, result.Count)
 		}
 	}
 	return err
-}
-
-func (a *app) pluginSearch(keyword string) error {
-	entries, err := catalog.Open(a.home).Entries()
-	if err != nil {
-		return err
-	}
-	keyword = strings.ToLower(strings.TrimSpace(keyword))
-	if keyword == "" {
-		return errors.New("请输入要搜索的包名关键词。运行 bmc plugin search --help 查看用法")
-	}
-	matches := newestEntries(entries, func(entry catalog.Entry) bool {
-		return strings.Contains(strings.ToLower(entry.Name), keyword)
-	})
-	for _, match := range matches {
-		fmt.Fprintf(a.out, "%s@%s\t%s\t%s\n", match.Name, match.Version, packages.CanonicalType(match.Type), match.Source)
-	}
-	return nil
 }
 
 func newestEntries(entries []catalog.Entry, include func(catalog.Entry) bool) []catalog.Entry {
@@ -73,6 +61,7 @@ func (a *app) catalog() (*catalog.Store, error) {
 }
 
 func (a *app) pluginFromCatalog(upgrading bool, selectors ...string) error {
+	a.pluginProgress("正在读取软件源索引并解析扩展包依赖…")
 	repository, err := a.catalog()
 	if err != nil {
 		return err
@@ -217,14 +206,17 @@ func (a *app) applyCatalogPlan(repository *catalog.Store, plan []catalog.Entry, 
 	defer os.RemoveAll(stage)
 	files := make([]string, 0, len(plan))
 	origins := make(map[string]string, len(plan))
-	for _, entry := range plan {
-		file, err := repository.Download(context.Background(), entry, stage)
+	for i, entry := range plan {
+		a.pluginProgress("正在下载 %s@%s（%s，%d/%d）…", entry.Name, entry.Version, entry.Source, i+1, len(plan))
+		file, err := repository.DownloadWithProgress(context.Background(), entry, stage, a.errOut)
 		if err != nil {
 			return fmt.Errorf("无法从 %s 下载 %s %s：%w", entry.Source, entry.Name, entry.Version, err)
 		}
+		a.pluginProgress("%s@%s 已下载并通过校验。", entry.Name, entry.Version)
 		files = append(files, file)
 		origins[entry.ID] = entry.Source
 	}
+	a.pluginProgress("正在准备扩展包变更…")
 	prepared, err := a.store.PrepareChanges(files, installed)
 	if err != nil {
 		return err

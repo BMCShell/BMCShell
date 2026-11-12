@@ -33,7 +33,7 @@ func (a *app) doctor(args []string) error {
 	var filter string
 	for len(args) > 0 {
 		switch args[0] {
-		case "-d", "--detail", "--detial":
+		case "-d", "--detail":
 			detailed = true
 		case "-a", "--auto":
 			auto = true

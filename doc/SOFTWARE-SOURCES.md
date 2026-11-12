@@ -12,8 +12,8 @@ bmc setting --set plugin.source.internal https://packages.example.com/bmcshell/i
 bmc plugin update
 bmc plugin list
 bmc plugin list --installed
-bmc plugin list --installed --detial
-bmc plugin search redfish
+bmc plugin list --installed --detail
+bmc plugin search redfish --detail
 bmc plugin install bmcshell-tool-ipmi bmcshell-tool-redfish@1.0.1
 bmc plugin upgrade bmcshell-tool-redfish
 bmc setting --reset plugin.source.internal
@@ -23,9 +23,9 @@ bmc setting --reset plugin.source.internal
 
 `bmc plugin list --installed` 或 `bmc plugin list -i` 只查看已安装的包。两种清单均可按包类型筛选，例如 `bmc plugin list tool` 或 `bmc plugin list --installed tool`。`bmc plugin search` 按关键词查询，每个 UUID 显示一个最新的兼容版本。
 
-加 `-d` 或 `--detial` 显示包描述，可与已安装筛选和类型筛选组合。旧索引可能没有描述字段，此时已安装版本可读取本地包清单。缺少描述的条目显示 `-`。源维护者可重新生成索引，客户端随后刷新缓存以获取描述。
+在终端里，列表和搜索默认用两行显示包名、版本和缩进的描述。加 `-d` 或 `--detail` 可查看自动折行的详情表格。列表可同时按安装状态和类型筛选。重定向输出时使用制表符分隔。旧索引缺少描述时，已安装版本可从本地清单补充。源维护者可更新索引，客户端刷新后即可显示新描述。
 
-安装和升级使用完整包名。一次安装可传入多个包名，每个包都可用 `@version` 指定版本。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。
+安装和升级使用完整包名。一次安装可传入多个包名，每个包都可用 `@version` 指定版本。若名称相同的包具有不同 UUID，安装时在交互终端列出候选供用户选择。已安装包升级时沿用安装来源。框架按平台和依赖约束解析版本，并校验下载 ZIP 的 SHA256 与包内清单。刷新、安装和升级会把各阶段进度写入标准错误。每次联网请求（含接收数据）最多等待 5 分钟。连接中断、超时或服务器暂时不可用时最多重试两次，默认分别等待 1 秒和 2 秒。服务器要求较长限流等待时会直接报告错误。
 
 本地安装使用一个 `--file`，后接一个或多个目录或 ZIP 路径。软件源安装和本地安装分别执行。一批包共同校验，校验通过后统一启用。
 

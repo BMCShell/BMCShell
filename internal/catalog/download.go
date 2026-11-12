@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"bmcshell/internal/httpretry"
 	"bmcshell/internal/packages"
 	"bmcshell/internal/proxy"
 )
@@ -97,7 +98,7 @@ func (s *Store) sourceClient(source Source) *http.Client {
 
 var client = http.Client{
 	Transport: proxy.HTTPTransport(""),
-	Timeout:   90 * time.Second,
+	Timeout:   5 * time.Minute,
 	CheckRedirect: func(req *http.Request, previous []*http.Request) error {
 		if len(previous) >= 10 || previous[len(previous)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 			return errors.New("软件源重定向到不受支持的地址")
@@ -112,41 +113,29 @@ var client = http.Client{
 	},
 }
 
-func fetch(ctx context.Context, client *http.Client, raw string, limit int64) (io.ReadCloser, error) {
+func fetch(ctx context.Context, client *http.Client, raw string, limit int64, progress io.Writer, label string, consume func(io.Reader) error) error {
 	u, err := networkURL(raw)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, errors.New("软件源请求无效")
+		return errors.New("软件源请求无效")
 	}
-	response, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		// net/http errors include the complete URL, which may contain a signed query.
-		return nil, errors.New("请求软件源失败")
-	}
-	if response.StatusCode != http.StatusOK {
-		response.Body.Close()
-		return nil, fmt.Errorf("软件源返回 HTTP %d", response.StatusCode)
-	}
-	if response.ContentLength > limit {
-		response.Body.Close()
-		return nil, errors.New("软件源数据超过大小限制")
-	}
-	return response.Body, nil
+	return httpretry.Get(client, req, limit, progress, label, consume)
 }
 
 // Download retrieves a candidate ZIP into an existing staging directory and
 // verifies both the bytes and the metadata used to plan the operation.
 func Download(ctx context.Context, entry Entry, dir string) (string, error) {
-	return download(ctx, &client, entry, dir)
+	return download(ctx, &client, entry, dir, nil)
 }
 
 func (s *Store) Download(ctx context.Context, entry Entry, dir string) (string, error) {
+	return s.DownloadWithProgress(ctx, entry, dir, nil)
+}
+
+func (s *Store) DownloadWithProgress(ctx context.Context, entry Entry, dir string, progress io.Writer) (string, error) {
 	if entry.source.InsecureTLS {
 		sources, err := s.Sources()
 		if err != nil {
@@ -156,18 +145,23 @@ func (s *Store) Download(ctx context.Context, entry Entry, dir string) (string, 
 			return "", errors.New("下载前软件源配置已变更")
 		}
 	}
-	return download(ctx, s.sourceClient(entry.source), entry, dir)
+	return download(ctx, s.sourceClient(entry.source), entry, dir, progress)
 }
 
-func download(ctx context.Context, client *http.Client, entry Entry, dir string) (string, error) {
+func download(ctx context.Context, client *http.Client, entry Entry, dir string, progress io.Writer) (string, error) {
 	if err := entry.validate(); err != nil {
 		return "", err
 	}
-	response, err := fetch(ctx, client, entry.URL, maxArchiveBytes)
-	if err != nil {
-		return "", err
-	}
-	defer response.Close()
+	var path string
+	err := fetch(ctx, client, entry.URL, maxArchiveBytes, progress, entry.Name+"@"+entry.Version, func(body io.Reader) error {
+		var err error
+		path, err = savePackage(body, entry, dir)
+		return err
+	})
+	return path, err
+}
+
+func savePackage(body io.Reader, entry Entry, dir string) (string, error) {
 	file, err := os.CreateTemp(dir, "package-*.zip")
 	if err != nil {
 		return "", err
@@ -180,7 +174,7 @@ func download(ctx context.Context, client *http.Client, entry Entry, dir string)
 		}
 	}()
 	digest := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(file, digest), io.LimitReader(response, maxArchiveBytes+1))
+	size, copyErr := io.Copy(io.MultiWriter(file, digest), io.LimitReader(body, maxArchiveBytes+1))
 	if err := errors.Join(copyErr, file.Close()); err != nil {
 		return "", err
 	}
