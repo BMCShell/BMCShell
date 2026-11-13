@@ -88,13 +88,18 @@ _bmcshell_call() (
         fi
     fi
     if [[ ${1-} == doctor ]]; then
-        builtin unset BMCSHELL_BRIDGE_BASH
+        builtin unset BMCSHELL_BRIDGE_BASH BMCSHELL_BRIDGE_BASHRC
+        local bashrc=${HOME:+$HOME/.bashrc}
         if command -v cygpath >/dev/null; then
             local native_bash
             if native_bash=$(command cygpath -aw -- "$BASH"); then
                 builtin export "BMCSHELL_BRIDGE_BASH=$native_bash"
             fi
+            if [[ -n $bashrc ]]; then
+                bashrc=$(command cygpath -aw -- "$bashrc") || bashrc=
+            fi
         fi
+        [[ -z $bashrc ]] || builtin export "BMCSHELL_BRIDGE_BASHRC=$bashrc"
     fi
     builtin export BMCSHELL_CONTEXT
     # Convert only actual file operands, never URLs or resolver arguments.
@@ -276,8 +281,20 @@ _bmcshell_restore_prompt() {
     builtin unset _BMCSHELL_BASE_PS1 _BMCSHELL_RENDERED_PS1
 }
 
+_bmcshell_capture_prompt_status() {
+    _BMCSHELL_PROMPT_STATUS=$?
+    return "$_BMCSHELL_PROMPT_STATUS"
+}
+
 _bmcshell_prompt_command() {
     local status=$? verified=false proxy=off
+    if [[ ${1-} == override ]]; then
+        status=${_BMCSHELL_PROMPT_STATUS:-$status}
+        builtin unset _BMCSHELL_PROMPT_STATUS
+        if [[ ${PS1-} != "${_BMCSHELL_RENDERED_PS1-}" ]]; then
+            _BMCSHELL_BASE_PS1=${PS1-}
+        fi
+    fi
     if [[ $_BMCSHELL_THEME_VERIFIED == true && ${_BMCSHELL_SESSION_STATE[v2.password]+set} == set ]]; then
         verified=true
     fi
@@ -290,18 +307,54 @@ _bmcshell_prompt_command() {
     return "$status"
 }
 
+_bmcshell_prompt_array_supported() {
+    (( BASH_VERSINFO[0] > 5 || ( BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1 ) )) &&
+        [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\ -[^[:space:]]*a ]]
+}
+
+_bmcshell_remove_prompt_hooks() {
+    if _bmcshell_prompt_array_supported; then
+        local index
+        for index in "${!PROMPT_COMMAND[@]}"; do
+            case ${PROMPT_COMMAND[index]} in
+                _bmcshell_capture_prompt_status|_bmcshell_prompt_command|'_bmcshell_prompt_command override')
+                    builtin unset "PROMPT_COMMAND[$index]"
+                    ;;
+            esac
+        done
+    else
+        local hooks=${PROMPT_COMMAND-}
+        hooks=${hooks#$'_bmcshell_capture_prompt_status\n'}
+        hooks=${hooks%$'\n_bmcshell_prompt_command override'}
+        hooks=${hooks#'_bmcshell_prompt_command; '}
+        if [[ -z $hooks || $hooks == _bmcshell_prompt_command ]]; then
+            builtin unset 'PROMPT_COMMAND[0]'
+        else
+            PROMPT_COMMAND=$hooks
+        fi
+    fi
+}
+
+_bmcshell_configure_prompt_hooks() {
+    _bmcshell_remove_prompt_hooks
+    if _bmcshell_prompt_array_supported; then
+        if [[ $1 == override ]]; then
+            PROMPT_COMMAND=(_bmcshell_capture_prompt_status ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"} '_bmcshell_prompt_command override')
+        else
+            PROMPT_COMMAND=(_bmcshell_prompt_command ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"})
+        fi
+    elif [[ $1 == override && -n ${PROMPT_COMMAND-} ]]; then
+        PROMPT_COMMAND=$'_bmcshell_capture_prompt_status\n'"${PROMPT_COMMAND}"$'\n_bmcshell_prompt_command override'
+    elif [[ -n ${PROMPT_COMMAND-} ]]; then
+        PROMPT_COMMAND="_bmcshell_prompt_command; $PROMPT_COMMAND"
+    else
+        PROMPT_COMMAND=_bmcshell_prompt_command
+    fi
+}
+
 _bmcshell_unload_theme() {
     [[ -n ${_BMCSHELL_THEME_ENTRY-} ]] || return 0
-    case ${PROMPT_COMMAND-} in
-        '_bmcshell_prompt_command; '*) PROMPT_COMMAND=${PROMPT_COMMAND#'_bmcshell_prompt_command; '} ;;
-        _bmcshell_prompt_command)
-            if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
-                builtin unset 'PROMPT_COMMAND[0]'
-            else
-                builtin unset PROMPT_COMMAND
-            fi
-            ;;
-    esac
+    _bmcshell_remove_prompt_hooks
     builtin unset -f _bmcshell_theme_render
     builtin unset _BMCSHELL_THEME_ENTRY _BMCSHELL_THEME_DRAWN _BMCSHELL_THEME_IP _BMCSHELL_THEME_VERIFIED
     builtin unset _BMCSHELL_THEME_SETTINGS
@@ -325,23 +378,15 @@ _bmcshell_load_theme() {
         return 2
     fi
     _BMCSHELL_THEME_ENTRY=$1
-    if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]] &&
-        (( BASH_VERSINFO[0] > 5 || ( BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1 ) )); then
-        PROMPT_COMMAND=(_bmcshell_prompt_command "${PROMPT_COMMAND[@]}")
-    elif [[ -n ${PROMPT_COMMAND-} ]]; then
-        PROMPT_COMMAND="_bmcshell_prompt_command; $PROMPT_COMMAND"
-    else
-        PROMPT_COMMAND=_bmcshell_prompt_command
-    fi
 }
 
 _bmcshell_render_prompt() {
     local prefix
     [[ $- == *i* ]] || return 0
     if [[ ${1-} == strict ]]; then
-        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=1 _bmcshell_bridge prompt) || return
+        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=2 _bmcshell_bridge prompt) || return
     else
-        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=1 _bmcshell_bridge prompt 2>/dev/null) || prefix=
+        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=2 _bmcshell_bridge prompt 2>/dev/null) || prefix=
     fi
     if [[ $prefix == $'entry:\t'* ]]; then
         local state=${prefix#*$'\t'}
@@ -352,7 +397,9 @@ _bmcshell_render_prompt() {
         _bmcshell_load_theme "${entry[0]}" || return
         _BMCSHELL_THEME_SETTINGS=("${entry[@]:1}")
         _BMCSHELL_THEME_IP=${state%%|*}
-        _BMCSHELL_THEME_VERIFIED=${state#*|}
+        state=${state#*|}
+        _BMCSHELL_THEME_VERIFIED=${state%%|*}
+        _bmcshell_configure_prompt_hooks "${state#*|}"
         return
     fi
     _bmcshell_unload_theme || return

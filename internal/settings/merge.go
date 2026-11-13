@@ -17,6 +17,10 @@ func MergeDraft(base, edited, current Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	merged.ThemeOverride, err = mergeValue("theme.override", base.ThemeOverride, edited.ThemeOverride, current.ThemeOverride)
+	if err != nil {
+		return Config{}, err
+	}
 	resolver, err := mergeValue("use.default_resolver", optionalValue(base.DefaultResolver),
 		optionalValue(edited.DefaultResolver), optionalValue(current.DefaultResolver))
 	if err != nil {

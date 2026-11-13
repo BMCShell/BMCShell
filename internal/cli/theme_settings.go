@@ -14,7 +14,7 @@ const pluginSettingPrefix = "plugin."
 
 func themeSettingKey(key string) (string, bool) {
 	name, ok := strings.CutPrefix(key, themeSettingPrefix)
-	return name, ok && key != "theme.active"
+	return name, ok && key != "theme.active" && key != "theme.override"
 }
 
 func (a *app) activeTheme(cfg settings.Config) (packages.Package, error) {

@@ -60,6 +60,21 @@ func TestPromptUsesActiveThemePackage(t *testing.T) {
 		t.Fatalf("prompt with saved setting = %q", got)
 	}
 
+	if got := libraryCLI(t, 0, "", "setting", "--get", "theme.override"); got != "false\n" {
+		t.Fatalf("override default = %q", got)
+	}
+	libraryCLI(t, 1, "", "setting", "--set", "theme.override", "yes")
+	libraryCLI(t, 0, "", "setting", "--set", "theme.override", "true")
+	t.Setenv("BMCSHELL_BRIDGE_THEME_SETTINGS", "2")
+	want := "entry:\t192.0.2.10|true|override\t" + path + "\nblank_line=false\ntext=one=two"
+	if got := libraryCLI(t, 0, "", "bridge", "prompt"); got != want {
+		t.Fatalf("override prompt = %q, want %q", got, want)
+	}
+	libraryCLI(t, 0, "", "setting", "--reset", "theme.override")
+	if got := libraryCLI(t, 0, "", "setting", "--get", "theme.override"); got != "false\n" {
+		t.Fatalf("override after reset = %q", got)
+	}
+
 	libraryCLI(t, 0, "", "setting", "--reset", "theme.active")
 	if got := libraryCLI(t, 0, "", "bridge", "prompt"); got != "" {
 		t.Fatalf("prompt after reset = %q", got)

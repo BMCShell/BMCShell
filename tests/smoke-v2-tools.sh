@@ -58,6 +58,7 @@ chmod +x "$scratch/bin/"*
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 source ./shell/bmcshell.sh
+[[ ${BMCSHELL_TLS_MODE-} == insecure ]]
 for name in bmcshell-tool-ipmi bmcshell-tool-redfish sbmc-tool-bssh bmcshell-tool-snmp sbmc-tool-cidtool sbmc-tool-smash; do
     bmc plugin install --file "../$name"
 done
@@ -77,7 +78,7 @@ cat > "$scratch/resolver/bmc-package.json" <<'EOF'
   "coreApi": 1,
   "help": "help.json",
   "changelog": "changelog.json",
-  "provides": {"resolvers": {"sbmc": {"entry": "resolver.exe"}}}
+  "provides": {"resolvers": {"sbmc": {"entry": "resolver.exe", "envReads": [{"name": "BMCSHELL_TLS_MODE", "required": true}]}}}
 }
 EOF
 printf '%s\n' '{"topics":{"resolver.sbmc":{"summary":"Offline resolver fixture help"}}}' > "$scratch/resolver/help.json"
@@ -97,6 +98,13 @@ func main() {
 		os.Exit(8)
 	}
 	mode := os.Args[2]
+	wantTLS := "insecure"
+	if mode == "tls-verify" {
+		wantTLS = "verify"
+	}
+	if os.Getenv("BMCSHELL_TLS_MODE") != wantTLS {
+		os.Exit(9)
+	}
 	if mode == "fail" {
 		os.Exit(7)
 	}
@@ -137,6 +145,11 @@ grep -Fqx -- 'ipmi (none) -I lan -vH192.0.2.99 -U operator -P --bin -p 6623 -b 1
 if bmc use 192.0.2.20 --resolver test-tool-resolver@1.0.0 -- success; then exit 1; fi
 bmc use 192.0.2.10 --resolver test-tool-resolver -- success
 [[ $BMCSHELL_CONTEXT == *'"target.resolver":"test-tool-resolver"'* ]]
+bmc setting --set BMCSHELL_TLS_MODE verify --reload
+[[ $BMCSHELL_TLS_MODE == verify ]]
+BMCSHELL_TLS_MODE=insecure bmc use 192.0.2.10 --resolver test-tool-resolver -- tls-verify
+bmc setting --reset BMCSHELL_TLS_MODE --reload
+[[ $BMCSHELL_TLS_MODE == insecure ]]
 bmc setting --set use.default_resolver test-tool-resolver
 [[ $(bmc setting --get use.default_resolver) == test-tool-resolver ]]
 bmc use 192.0.2.10 -- success
@@ -216,6 +229,12 @@ grep -Fqx -- 'ipmi (session) -I lanplus -U tester -P test-only -H 192.0.2.10 -- 
 setcid c05 >/dev/null
 smash off
 [[ $(redfish GET /redfish/v1/Managers) == '{"mock":true}' ]]
+grep -Eq -- '^curl .* -k( |$)' "$BMC_TEST_LOG"
+bmc setting --set BMCSHELL_TLS_MODE verify --reload
+redfish GET /redfish/v1/Managers >/dev/null
+curl_request=$(tail -n 1 "$BMC_TEST_LOG")
+[[ $curl_request == 'curl '* && $curl_request != *' -k '* ]]
+bmc setting --reset BMCSHELL_TLS_MODE --reload
 [[ $(bssh --root --manual -- uptime) == 'mock ssh' ]]
 [[ $(snmp2get .1.3.6.1.2.1.1.1.0) == 'mock SNMP GET' ]]
 snmp2set .1.3.6.1.2.1.1.1.0 s fixture >/dev/null

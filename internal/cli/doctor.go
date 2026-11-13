@@ -51,6 +51,7 @@ func (a *app) doctor(args []string) error {
 	if detailed {
 		fmt.Fprintf(a.out, "  版本：%s\n  数据目录：%s\n", a.version, a.home)
 	}
+	a.doctorBashStartup(filter)
 	installed, damaged, index, err := a.store.SyncRepairSuggestions(collectRepairSuggestions)
 	if err != nil {
 		return fmt.Errorf("无法检查扩展包：%w", err)

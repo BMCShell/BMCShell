@@ -39,6 +39,18 @@ func (a *app) settingEnvironmentBridge(args []string) error {
 		}
 		values = append(values, [2]string{snmpVersion, value})
 	}
+	// Legacy Bash tools read the framework TLS default from the shell environment.
+	const tlsMode = "BMCSHELL_TLS_MODE"
+	field, err := a.settingField(tlsMode)
+	if err != nil {
+		return err
+	}
+	if value, ok := environmentValue(field, nil, cfg.EnvDefaults, ""); ok {
+		if err := field.Validate(value); err != nil {
+			return err
+		}
+		values = append(values, [2]string{tlsMode, value})
+	}
 	var response strings.Builder
 	fmt.Fprintf(&response, "settings-env-v1\t%s\n", cfg.Proxy)
 	for _, pair := range values {

@@ -39,9 +39,10 @@ func (t Tool) ManagedEnv() bool {
 }
 
 type Resolver struct {
-	Entry             string        `json:"entry"`
-	ProxyCapabilities []string      `json:"proxyCapabilities,omitempty"`
-	StatusFields      []StatusField `json:"statusFields,omitempty"`
+	Entry             string             `json:"entry"`
+	EnvReads          []envregistry.Read `json:"envReads,omitempty"`
+	ProxyCapabilities []string           `json:"proxyCapabilities,omitempty"`
+	StatusFields      []StatusField      `json:"statusFields,omitempty"`
 }
 
 type StatusField struct {

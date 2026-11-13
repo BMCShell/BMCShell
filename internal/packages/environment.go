@@ -72,6 +72,9 @@ func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 			}
 		}
 		for resolver, spec := range p.Provides.Resolvers {
+			if err := checkEnvironmentReads(registry, spec.EnvReads, false); err != nil {
+				return nil, fmt.Errorf("解析器 %s：%w", resolver, err)
+			}
 			for _, status := range spec.StatusFields {
 				field, ok := registry.ByKey(status.Key)
 				owner := owners[field.Name]
@@ -85,12 +88,8 @@ func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 }
 
 func checkToolEnvironment(registry envregistry.Registry, owners map[string]string, p Package, spec Tool) error {
-	reads := make(map[string]bool, len(spec.EnvReads))
-	for _, read := range spec.EnvReads {
-		if _, exists := registry[read.Name]; !exists || reads[read.Name] {
-			return fmt.Errorf("环境变量依赖 %q 未登记或重复", read.Name)
-		}
-		reads[read.Name] = true
+	if err := checkEnvironmentReads(registry, spec.EnvReads, true); err != nil {
+		return err
 	}
 	writes := make(map[string]bool, len(spec.EnvWrites))
 	for _, write := range spec.EnvWrites {
@@ -99,6 +98,21 @@ func checkToolEnvironment(registry envregistry.Registry, owners map[string]strin
 			return fmt.Errorf("环境变量写入项 %q 未授权或重复", write.Name)
 		}
 		writes[write.Name] = true
+	}
+	return nil
+}
+
+func checkEnvironmentReads(registry envregistry.Registry, reads []envregistry.Read, allowSensitive bool) error {
+	seen := make(map[string]bool, len(reads))
+	for _, read := range reads {
+		field, exists := registry[read.Name]
+		if !exists || seen[read.Name] {
+			return fmt.Errorf("环境变量依赖 %q 未登记或重复", read.Name)
+		}
+		if field.Sensitive && !allowSensitive {
+			return fmt.Errorf("环境变量依赖 %q 是敏感字段", read.Name)
+		}
+		seen[read.Name] = true
 	}
 	return nil
 }

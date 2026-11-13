@@ -25,6 +25,7 @@ type Config struct {
 	EnvDefaults     map[string]string            `json:"env.defaults,omitempty"`
 	DefaultResolver *Resolver                    `json:"use.default_resolver,omitempty"`
 	Theme           string                       `json:"theme.active,omitempty"`
+	ThemeOverride   bool                         `json:"theme.override,omitempty"`
 	ThemeSettings   map[string]map[string]string `json:"theme.settings,omitempty"`
 	PluginSettings  map[string]map[string]string `json:"plugin.settings,omitempty"`
 	Sources         *[]Source                    `json:"plugin.sources,omitempty"`

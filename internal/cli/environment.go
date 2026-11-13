@@ -74,12 +74,12 @@ func (a *app) statusEnvironment(ctx session.Context) error {
 }
 
 func environmentValues(t packages.Tool, registry envregistry.Registry, ctx session.Context, defaults map[string]string) (map[string]string, error) {
-	return environmentValuesFrom(t, registry, ctx, defaults, shellRuntimeValues)
+	return environmentValuesFrom(t.EnvReads, registry, ctx, defaults, shellRuntimeValues)
 }
 
-func environmentValuesFrom(t packages.Tool, registry envregistry.Registry, ctx session.Context, defaults, runtime map[string]string) (map[string]string, error) {
-	values := make(map[string]string, len(t.EnvReads))
-	for _, read := range t.EnvReads {
+func environmentValuesFrom(reads []envregistry.Read, registry envregistry.Registry, ctx session.Context, defaults, runtime map[string]string) (map[string]string, error) {
+	values := make(map[string]string, len(reads))
+	for _, read := range reads {
 		field, registered := registry[read.Name]
 		if !registered {
 			return nil, fmt.Errorf("环境变量 %q 尚未登记", read.Name)

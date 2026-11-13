@@ -24,7 +24,7 @@ func TestSettingsMenu(t *testing.T) {
 	input := strings.NewReader(strings.Join([]string{
 		"99", "4", "1", "3", "1", "4", "0",
 		"2", "2", "1", "invalid-ip", "2001:db8::1", "0",
-		"3", "1", "2", "0",
+		"3", "1", "1", "0",
 		"5", "1", "team", "https://10.0.0.1/index.json?token=hidden-value", "2",
 		"1", "1", "https://10.0.0.2/index.json?token=hidden-value",
 		"1", "2", "1", "0", "0", "1",
@@ -44,7 +44,7 @@ func TestSettingsMenu(t *testing.T) {
 	if got := cfg.EnvDefaults["BMCSHELL_TARGET_IP"]; got != "2001:db8::1" {
 		t.Errorf("saved target IP = %q", got)
 	}
-	if got := cfg.EnvDefaults["BMCSHELL_TLS_MODE"]; got != "insecure" {
+	if got := cfg.EnvDefaults["BMCSHELL_TLS_MODE"]; got != "verify" {
 		t.Errorf("saved TLS mode = %q", got)
 	}
 	sources, err := catalog.Open(home).Sources()
@@ -94,10 +94,11 @@ func TestThemeSettingsMenu(t *testing.T) {
 	var out, errOut bytes.Buffer
 	input := strings.NewReader(strings.Join([]string{
 		"1", "1", "2", // Activate the first theme.
-		"2", "2", // Select ASCII.
-		"3", "1", "9", "7", // Reject the out-of-range integer and retry.
+		"2", "1", // Enable prompt override.
+		"3", "2", // Select ASCII.
+		"4", "1", "9", "7", // Reject the out-of-range integer and retry.
 		"1", "3", // Switch to the second theme in the same menu.
-		"2", "2", // Save false for the same key on the second theme.
+		"3", "2", // Save false for the same key on the second theme.
 		"1", "2", // Return to the first theme.
 		"0", "0", "1",
 	}, "\n"))
@@ -105,7 +106,7 @@ func TestThemeSettingsMenu(t *testing.T) {
 	if err := a.settingsMenu(); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"终端主题    第一主题", "符号样式    自动", "符号样式    ASCII", "显示宽度    7", "额外样式    开启", "额外样式    关闭"} {
+	for _, label := range []string{"终端主题    第一主题", "覆盖 Bash 提示符    开启", "符号样式    自动", "符号样式    ASCII", "显示宽度    7", "额外样式    开启", "额外样式    关闭"} {
 		if !strings.Contains(out.String(), label) {
 			t.Errorf("missing menu label %q", label)
 		}
@@ -120,6 +121,9 @@ func TestThemeSettingsMenu(t *testing.T) {
 	firstThemeView := out.String()[firstThemeIndex:]
 	if !strings.Contains(firstThemeView, "符号样式    ASCII") || strings.Contains(firstThemeView, "额外样式") {
 		t.Errorf("incorrect appearance menu after switching back: %s", firstThemeView)
+	}
+	if got := libraryCLI(t, 0, "", "setting", "--get", "theme.override"); got != "true\n" {
+		t.Fatalf("saved override = %q", got)
 	}
 	if got := libraryCLI(t, 0, "", "setting", "--get", "theme.style"); got != "ascii\n" {
 		t.Fatalf("first theme saved style = %q", got)

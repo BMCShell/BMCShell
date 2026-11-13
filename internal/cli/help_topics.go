@@ -41,7 +41,7 @@ var builtinHelp = map[string]render.Topic{
 		},
 	},
 	"doctor": {
-		Summary: "检查框架、已安装扩展包和外部命令依赖。",
+		Summary: "检查 Bash 启动顺序、框架、已安装扩展包和外部命令依赖。",
 		Usage:   []string{"bmc doctor [-d|--detail] [-f|--filter <ok|missing>] [-a|--auto]"},
 		Options: []render.Option{
 			{Name: "-d, --detail", Description: "显示版本、数据目录、依赖路径及修复建议。"},
@@ -197,6 +197,7 @@ var builtinHelp = map[string]render.Topic{
 		Examples: []render.Example{
 			{Command: "bmc setting --get use.default_resolver", Description: "查看默认解析器。"},
 			{Command: "bmc setting --get theme.<参数键>", Description: "读取当前主题声明的参数。也可用 --set 修改，或用 --reset 恢复该参数的默认值。"},
+			{Command: "bmc setting --set theme.override true", Description: "让活动 Bash 脚本主题在其他提示符命令之后绘制。"},
 			{Command: "bmc setting --set plugin.<包名>.<参数键> <值> --reload", Description: "保存指定插件的参数并重载环境。"},
 			{Command: "bmc setting --check", Description: "检查设置是否有效。"},
 		},

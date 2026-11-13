@@ -137,7 +137,7 @@ func (a *app) tool(args []string) error {
 				err = toolReady(toolRef{Name: name, Spec: spec, Package: p}, ctx)
 			}
 			if err == nil && spec.ManagedEnv() {
-				_, err = environmentValuesFrom(spec, registry, ctx, cfg.EnvDefaults, shellStatusValues)
+				_, err = environmentValuesFrom(spec.EnvReads, registry, ctx, cfg.EnvDefaults, shellStatusValues)
 			}
 			groups[p.Name] = append(groups[p.Name], entry{name, spec.Scope, err})
 		}
@@ -329,19 +329,15 @@ func (a *app) resolve(args []string) error {
 		}
 		extra = extra[1:]
 	}
-	var fallback *settings.Resolver
-	if name == "" {
-		cfg, err := settings.Load(a.home)
-		if err != nil {
-			return err
-		}
-		fallback = cfg.DefaultResolver
+	cfg, err := settings.Load(a.home)
+	if err != nil {
+		return err
 	}
 	list, err := a.store.List()
 	if err != nil {
 		return err
 	}
-	resolver, err := session.SelectResolver(list, name, fallback)
+	resolver, err := session.SelectResolver(list, name, cfg.DefaultResolver)
 	if err != nil {
 		return err
 	}
@@ -359,6 +355,14 @@ func (a *app) resolve(args []string) error {
 	environment, err := a.resolverEnvironment(resolver.Package, list, registry)
 	if err != nil {
 		return err
+	}
+	spec := resolver.Package.Provides.Resolvers[resolver.Name]
+	values, err := environmentValuesFrom(spec.EnvReads, registry, nil, cfg.EnvDefaults, nil)
+	if err != nil {
+		return err
+	}
+	for _, key := range sortedKeys(values) {
+		environment = append(environment, key+"="+values[key])
 	}
 	result, err := session.Resolve(resolver, ip, extra, address, environment, a.in, a.errOut)
 	if err != nil {
@@ -495,8 +499,13 @@ func (a *app) prompt() error {
 		}
 		verified := ctx["target.auth_verified"] == "true"
 		var response strings.Builder
-		fmt.Fprintf(&response, "entry:\t%s|%t\t%s", ctx["target.ip"], verified, path)
-		if os.Getenv("BMCSHELL_BRIDGE_THEME_SETTINGS") == "1" {
+		protocol := os.Getenv("BMCSHELL_BRIDGE_THEME_SETTINGS")
+		fmt.Fprintf(&response, "entry:\t%s|%t", ctx["target.ip"], verified)
+		if protocol == "2" && cfg.ThemeOverride {
+			response.WriteString("|override")
+		}
+		fmt.Fprintf(&response, "\t%s", path)
+		if protocol == "1" || protocol == "2" {
 			for _, field := range p.Settings {
 				fmt.Fprintf(&response, "\n%s=%s", field.Key, themeSettingValue(cfg, p, field))
 			}

@@ -141,6 +141,8 @@ func (e *settingsEditor) groups() ([]settingGroup, error) {
 	groups := []settingGroup{
 		{"外观", "选择终端主题，调整当前主题的显示参数。", []settingItem{
 			{key: "theme.active", label: "终端主题", hint: "选择已安装主题。保存后刷新当前终端的提示符。", defaultValue: "none"},
+			{key: "theme.override", label: "覆盖 Bash 提示符", hint: "让活动脚本主题在其他提示符命令之后绘制。", defaultValue: "false",
+				options: []settingOption{{value: "true", label: "开启"}, {value: "false", label: "关闭"}}},
 		}},
 		{"目标与认证", "管理默认解析器和连接默认值。", []settingItem{
 			{key: "use.default_resolver", label: "默认解析器", hint: "下次运行 bmc use 时使用。", defaultValue: "generic"},
@@ -259,6 +261,8 @@ func (e *settingsEditor) changed(item settingItem) bool {
 	switch item.key {
 	case "theme.active":
 		return base.Theme != draft.Theme
+	case "theme.override":
+		return base.ThemeOverride != draft.ThemeOverride
 	case "use.default_resolver":
 		return !reflect.DeepEqual(base.DefaultResolver, draft.DefaultResolver)
 	}

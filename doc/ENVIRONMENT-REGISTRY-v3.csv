@@ -8,7 +8,7 @@
 "oem.<resolver>.<field>","BMCSHELL_CONTEXT[oem.<resolver>.<field>]","","OEM 字段","声明该字段的扩展","否","视字段而定","","现有命名规则","当前按解析器名限制写入；每个 OEM 字段需单独登记"
 "auth.username","_BMCSHELL_SESSION_STATE[v2.user] / V2 _BMC_USER","BMCSHELL_AUTH_USERNAME","会话字段","声明需要的工具","按命令要求","否","","已实现","解析器可与 auth.password 一起返回，存于 Bash 私有会话"
 "auth.password","_BMCSHELL_SESSION_STATE[v2.password] / V2 _BMC_PASSWORD","BMCSHELL_AUTH_PASSWORD","敏感字段","需要认证的工具","按命令要求","是","","已实现","解析器或兼容认证入口填充；仅按需交给认证工具"
-"tls.mode","_BMCSHELL_SESSION_STATE[v2.tls] / V2 _BMC_TLS","BMCSHELL_TLS_MODE","会话字段","声明需要的工具","否","否","verify","拟新增","逻辑字段和变量名均为草案；V2 兼容层默认 verify"
+"tls.mode","_BMCSHELL_SESSION_STATE[v2.tls] / V2 _BMC_TLS","BMCSHELL_TLS_MODE","框架设置","设备 HTTPS 工具和解析器","否","否","insecure","已实现","insecure 跳过证书校验；verify 开启证书校验"
 "snmp.version","_BMCSHELL_SESSION_STATE[v2.snmp_version] / V2 _BMC_SNMP_VERSION","BMCSHELL_SNMP_VERSION","会话字段","声明需要的工具","否","否","2c","拟新增","逻辑字段和变量名均为草案；V2 兼容层默认 2c"
 "snmp.enterprises","BMCSHELL_CONTEXT[snmp.enterprises] / 进程环境","BMCSHELL_SNMP_ENTERPRISES","SNMP 会话字段","声明需要的工具及 Book","否","否","","已实现","企业编号或前缀；完整 OID 模板为 1.3.6.1.4.1.enterprises，编号含 0 替换 enterprises；点分值替换完整模板前缀；旧模板 enterprises 保留 0 原文替换；通用 substitutions 按原文替换；空值表示未提供"
 "snmp.community","_BMCSHELL_SESSION_STATE[v2.snmp_community] / V2 _BMC_SNMP_COMMUNITY","BMCSHELL_SNMP_COMMUNITY","敏感字段","需要认证的 SNMP 命令","按命令要求","是","","现有私有状态","敏感字段登记名；值通过按需凭据接口交付；当前兼容层只有一个团体名字段"

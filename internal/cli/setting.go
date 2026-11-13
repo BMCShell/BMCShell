@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"bmcshell/internal/catalog"
@@ -14,7 +15,7 @@ import (
 
 const sourcePrefix = "plugin.source."
 
-var frameworkSettings = []string{"use.default_resolver", "theme.active"}
+var frameworkSettings = []string{"use.default_resolver", "theme.active", "theme.override"}
 
 func (a *app) setting(args []string) error {
 	var reload bool
@@ -55,6 +56,7 @@ func (a *app) runSetting(args []string) error {
 	if len(args) == 1 && args[0] == "--reset" {
 		if err := settings.Update(a.home, func(cfg *settings.Config) error {
 			cfg.Theme, cfg.DefaultResolver, cfg.EnvDefaults, cfg.ThemeSettings, cfg.PluginSettings = "", nil, nil, nil, nil
+			cfg.ThemeOverride = false
 			sources := []catalog.Source{}
 			cfg.Sources = &sources
 			return nil
@@ -130,6 +132,8 @@ func (a *app) editSetting(cfg *settings.Config, key string, value *string) error
 		cfg.DefaultResolver = nil
 	case "theme.active":
 		cfg.Theme = ""
+	case "theme.override":
+		cfg.ThemeOverride = false
 	default:
 		if _, err := a.settingField(key); err != nil {
 			return err
@@ -245,6 +249,8 @@ func (a *app) settingValue(cfg settings.Config, key string) (string, error) {
 		}
 		// Keep an unavailable default visible and allow the user to reset it.
 		return cfg.DefaultResolver.Export, nil
+	case "theme.override":
+		return strconv.FormatBool(cfg.ThemeOverride), nil
 	case "theme.active":
 		if cfg.Theme == "" {
 			return "none", nil
@@ -280,6 +286,12 @@ func (a *app) settingValue(cfg settings.Config, key string) (string, error) {
 
 func (a *app) setValue(cfg *settings.Config, key, value string) error {
 	switch key {
+	case "theme.override":
+		if value != "true" && value != "false" {
+			return errors.New("theme.override 须设为 true 或 false")
+		}
+		cfg.ThemeOverride = value == "true"
+		return nil
 	case "theme.active":
 		if value == "none" {
 			cfg.Theme = ""

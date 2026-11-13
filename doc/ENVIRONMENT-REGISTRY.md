@@ -57,6 +57,18 @@ SBMC_PLATFORM_CHIP,oem.sbmc.chip,false,
 框架启动 EXE 或 Bash 工具子进程前，清理继承环境中同名的受管会话变量，再按工具读清单注入最终值。EXE 使用标准环境变量读取接口，Bash 使用带引号的变量展开。当前 V2 同 Shell 工具由兼容层适配。解析器通过候选 JSON 同时提供 `auth.username` 和 `auth.password` 时，框架将其交给 Bash 私有会话。声明所需 `envReads` 的工具才能从框架获得对应环境变量。密码在 `bmc status --env` 中遮蔽。
 
 
+解析器也可以在 `provides.resolvers.<名称>` 中通过 `envReads` 声明非敏感变量。框架按已保存设置、框架注册表、插件注册表的顺序解析这些变量。解析器运行于新目标会话建立之前。
+
+## 设备 HTTPS 证书校验
+
+`BMCSHELL_TLS_MODE` 是设备 HTTPS 连接的框架设置。默认值 `insecure` 跳过证书校验，`verify` 开启校验。SBMC 解析器通过 `envReads` 获取模式，Redfish Bash 工具通过启动或重载时导出的设置获取模式。各模块将模式转换成自己使用的 TLS 选项。
+
+```bash
+bmc setting --get BMCSHELL_TLS_MODE
+bmc setting --set BMCSHELL_TLS_MODE verify --reload
+bmc setting --reset BMCSHELL_TLS_MODE --reload
+```
+
 ## SNMP 企业前缀
 
 `snmp.enterprises` / `BMCSHELL_SNMP_ENTERPRISES` 登记在 SNMP 分组，是可选的非敏感共享字段。值接受非负十进制企业编号或点分十进制前缀，供声明该字段的工具和 Book 读取。解析器可在公开结果中返回 `snmp.enterprises`，也可以通过进程环境或 `bmc setting --set BMCSHELL_SNMP_ENTERPRISES <值>` 提供。显式非空环境值优先于会话值。

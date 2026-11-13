@@ -18,7 +18,7 @@ func TestFrameworkRegistry(t *testing.T) {
 		ip.Validate("wrong") == nil || ip.Validate("fe80::1%eth0") == nil {
 		t.Fatal("invalid target IP definition")
 	}
-	if tls := registry["BMCSHELL_TLS_MODE"]; tls.FrameworkDefault == nil || *tls.FrameworkDefault != "verify" {
+	if tls := registry["BMCSHELL_TLS_MODE"]; tls.FrameworkDefault == nil || *tls.FrameworkDefault != "insecure" {
 		t.Fatal("framework TLS default is missing")
 	}
 	if _, present := registry["SBMC_PLATFORM_CID"]; present {
@@ -26,7 +26,7 @@ func TestFrameworkRegistry(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), FrameworkFilename)
-	edited := strings.Replace(doc.RegistryCSV(), `"verify","拟新增"`, `"insecure","拟新增"`, 1)
+	edited := strings.Replace(doc.RegistryCSV(), `"insecure","已实现"`, `"verify","已实现"`, 1)
 	if err := os.WriteFile(path, []byte(edited), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestFrameworkRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tls := registry["BMCSHELL_TLS_MODE"]; tls.FrameworkDefault == nil || *tls.FrameworkDefault != "insecure" {
+	if tls := registry["BMCSHELL_TLS_MODE"]; tls.FrameworkDefault == nil || *tls.FrameworkDefault != "verify" {
 		t.Fatal("edited framework TLS default was not loaded")
 	}
 
