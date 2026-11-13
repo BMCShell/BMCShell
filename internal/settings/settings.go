@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+
+	"bmcshell/internal/filelock"
 )
 
 type Resolver struct {
@@ -17,12 +21,59 @@ type Resolver struct {
 }
 
 type Config struct {
-	LibrarySources  map[string]string `json:"library.sources,omitempty"`
-	EnvDefaults     map[string]string `json:"env.defaults,omitempty"`
-	DefaultResolver *Resolver         `json:"use.default_resolver,omitempty"`
-	Theme           string            `json:"theme.active,omitempty"`
-	Proxy           string            `json:"proxy.address,omitempty"`
-	ProxyPreferred  string            `json:"proxy.preferred_address,omitempty"`
+	LibrarySources  map[string]string            `json:"library.sources,omitempty"`
+	EnvDefaults     map[string]string            `json:"env.defaults,omitempty"`
+	DefaultResolver *Resolver                    `json:"use.default_resolver,omitempty"`
+	Theme           string                       `json:"theme.active,omitempty"`
+	ThemeSettings   map[string]map[string]string `json:"theme.settings,omitempty"`
+	PluginSettings  map[string]map[string]string `json:"plugin.settings,omitempty"`
+	Sources         *[]Source                    `json:"plugin.sources,omitempty"`
+	Proxy           string                       `json:"proxy.address,omitempty"`
+	ProxyPreferred  string                       `json:"proxy.preferred_address,omitempty"`
+}
+
+func Clone(cfg Config) Config {
+	cfg.LibrarySources = maps.Clone(cfg.LibrarySources)
+	cfg.EnvDefaults = maps.Clone(cfg.EnvDefaults)
+	cfg.ThemeSettings = clonePackageValues(cfg.ThemeSettings)
+	cfg.PluginSettings = clonePackageValues(cfg.PluginSettings)
+	if cfg.DefaultResolver != nil {
+		resolver := *cfg.DefaultResolver
+		cfg.DefaultResolver = &resolver
+	}
+	if cfg.Sources != nil {
+		sources := slices.Clone(*cfg.Sources)
+		cfg.Sources = &sources
+	}
+	return cfg
+}
+
+func clonePackageValues(values map[string]map[string]string) map[string]map[string]string {
+	copy := maps.Clone(values)
+	for id, fields := range copy {
+		copy[id] = maps.Clone(fields)
+	}
+	return copy
+}
+
+// Update serializes read-modify-write operations on the shared settings file.
+func Update(root string, change func(*Config) error) error {
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return err
+	}
+	unlock, err := filelock.Acquire(filepath.Join(root, ".settings.lock"))
+	if err != nil {
+		return fmt.Errorf("无法锁定设置文件：%w", err)
+	}
+	defer unlock()
+	cfg, err := Load(root)
+	if err != nil {
+		return err
+	}
+	if err := change(&cfg); err != nil {
+		return err
+	}
+	return Save(root, cfg)
 }
 
 func Load(root string) (Config, error) {

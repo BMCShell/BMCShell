@@ -65,7 +65,7 @@ source ./shell/bmcshell.sh
 - `framework.db` 登记活动包版本和相应的 Library 工作库。Book 的查询规则继续保存在该书的 `book_meta`。
 - `books/<UUID>/<包版本>/` 保存完整 Book 包。Tool、Theme 和 Bundle 位于 `plugins/<类型>/<UUID>/<包版本>/`。
 - `libraries/<UUID>/releases/<包版本>/` 保存 Library 发布模板。`libraries/<UUID>/gen-…/` 保存工作库、发布基准和审计记录。
-- 软件源配置和索引缓存位于 `catalog/`，用户设置位于 `settings.json`。
+- 用户设置与软件源配置位于 `settings.json`，软件源索引缓存位于 `catalog/`。首次保存软件源前仍可读取旧的 `catalog/sources.json`。
 
 ## 创建与打包插件
 
@@ -79,6 +79,38 @@ go build -trimpath -o BMCShell-Scaffold.exe ./cmd/bmc-scaffold
 脚手架支持 `toolplugin`、`book`、`library`、`theme` 和 `bundle`。每个新项目获得独立 Git 仓库、UUID、包清单、帮助、变更记录、README 和打包脚本。生成 `bundle` 时用 `--member <UUID>` 逐项指定成员。生成 `toolplugin` 后按该项目的 README 构建示例 EXE。
 
 在任一插件项目内运行 `pwsh -File ./scripts/pack-release.ps1` 即可输出独立 ZIP 和 SHA256 清单。Book 项目的数据命名为 `book/<shortName>.book.db`，使用 2.x 的 SQLite 工具书格式，包括 `book_meta` 及其声明的数据表。每份数据库仍对应一个独立 Book 包。
+
+### 主题参数
+
+主题可在 `bmc-package.json` 的 `settings` 数组中声明参数。启用主题后，`bmc setting` 的「外观」会加载当前主题的参数。枚举和布尔值使用编号选择，整数和文本在保存时校验。
+
+```json
+{
+  "settings": [
+    {
+      "key": "glyphs",
+      "label": "符号样式",
+      "type": "enum",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "自动" },
+        { "value": "ascii", "label": "ASCII" }
+      ]
+    },
+    { "key": "blank_line", "label": "命令间留空行", "type": "boolean", "default": true }
+  ]
+}
+```
+
+每项需要唯一的 `key`、显示名 `label`、`type` 和 `default`。键以小写字母开头，可含小写字母、数字及下划线，`active` 是框架保留键。支持 `enum`、`boolean`、`integer` 和 `string`。枚举默认值须匹配某个选项。布尔和整数默认值使用 JSON 布尔值和整数，整数可通过 `min`、`max` 限制范围。字符串使用可打印的单行文本。
+
+`settings` 也适用于解析器及其他插件。可用 `path` 指定「插件设置」中的点分分组，例如 `connection.resolvers`。设置及枚举选项可用 `hint` 声明选中时显示的单行说明。可选的 `env` 声明重载后导出的环境变量，名称使用发布方命名空间，并且在同一安装中唯一。已安装主题和解析器导出分别进入 `theme.active` 与 `use.default_resolver` 的选择列表。
+
+`bmc setting --get theme.glyphs` 读取当前主题参数，`bmc setting --set theme.glyphs ascii` 保存，`bmc setting --reset theme.glyphs` 恢复清单默认值。也可用 `plugin.<包名或 UUID>.<参数键>` 指定插件。框架按包 UUID 保存修改。插件升级后，失效的值回退到新版本的默认值，`bmc setting --check` 会提示已安装插件的失效值。
+
+在设置中心用方向键移动，Enter 确认，Esc 返回。确认的修改进入草稿，可在意外退出后恢复。选择「保存并退出」提交所有改动并重载当前 Bash 的设置环境。命令行修改直接写入，末尾附加 `--reload` 可在成功后重载，也可单独运行 `bmc setting --reload`。
+
+声明参数的主题使用 `.bashrc.perso` 作为 `data` 入口。Bash 在调用 `_bmcshell_theme_render` 时保留现有五个位置参数，从第六个参数开始按清单顺序逐项传入 `key=value`。主题通过 `shift 5` 和 `for option in "$@"` 读取参数，按第一个等号拆分键和值。
 
 ## 扩展与业务库
 

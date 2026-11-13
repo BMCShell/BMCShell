@@ -17,10 +17,23 @@ type proxyConfig struct {
 }
 
 func (a *app) configureProxy(args []string) (proxyConfig, error) {
-	cfg, err := settings.Load(a.home)
-	if err != nil {
-		return proxyConfig{}, err
+	if len(args) == 0 {
+		cfg, err := settings.Load(a.home)
+		if err != nil {
+			return proxyConfig{}, err
+		}
+		return configureProxy(&cfg, args)
 	}
+	var result proxyConfig
+	err := settings.Update(a.home, func(cfg *settings.Config) error {
+		var err error
+		result, err = configureProxy(cfg, args)
+		return err
+	})
+	return result, err
+}
+
+func configureProxy(cfg *settings.Config, args []string) (proxyConfig, error) {
 	active, err := shellProxyAddress(cfg.Proxy)
 	if err != nil {
 		return proxyConfig{}, err
@@ -53,9 +66,6 @@ func (a *app) configureProxy(args []string) (proxyConfig, error) {
 	}
 
 	cfg.Proxy, cfg.ProxyPreferred = active, preferred
-	if err := settings.Save(a.home, cfg); err != nil {
-		return proxyConfig{}, err
-	}
 	return proxyConfig{active, preferred}, nil
 }
 

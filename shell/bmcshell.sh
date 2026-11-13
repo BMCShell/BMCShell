@@ -76,7 +76,7 @@ _bmcshell_call() (
         [[ $width =~ ^[1-9][0-9]*$ ]] || width=${COLUMNS:-80}
         builtin export "BMCSHELL_BRIDGE_PLUGIN_COLUMNS=$width"
     fi
-    if [[ ${1-} == book ]]; then
+    if [[ ${1-} == book || ${1-} == setting ]]; then
         builtin unset BMCSHELL_BOOK_TTY BMCSHELL_BOOK_STTY BMCSHELL_BOOK_BASH
         if [[ -t 0 && -t 1 ]] && command -v cygpath >/dev/null; then
             local book_tty book_stty book_bash
@@ -276,11 +276,87 @@ _bmcshell_restore_prompt() {
     builtin unset _BMCSHELL_BASE_PS1 _BMCSHELL_RENDERED_PS1
 }
 
+_bmcshell_prompt_command() {
+    local status=$? verified=false proxy=off
+    if [[ $_BMCSHELL_THEME_VERIFIED == true && ${_BMCSHELL_SESSION_STATE[v2.password]+set} == set ]]; then
+        verified=true
+    fi
+    [[ -z ${_BMCSHELL_PROXY_ADDRESS-} ]] || proxy=on
+    if _bmcshell_theme_render "$status" "$_BMCSHELL_THEME_IP" "$verified" "$proxy" "${_BMCSHELL_THEME_DRAWN-}" \
+        ${_BMCSHELL_THEME_SETTINGS[@]+"${_BMCSHELL_THEME_SETTINGS[@]}"}; then
+        _BMCSHELL_RENDERED_PS1=$PS1
+        _BMCSHELL_THEME_DRAWN=1
+    fi
+    return "$status"
+}
+
+_bmcshell_unload_theme() {
+    [[ -n ${_BMCSHELL_THEME_ENTRY-} ]] || return 0
+    case ${PROMPT_COMMAND-} in
+        '_bmcshell_prompt_command; '*) PROMPT_COMMAND=${PROMPT_COMMAND#'_bmcshell_prompt_command; '} ;;
+        _bmcshell_prompt_command)
+            if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
+                builtin unset 'PROMPT_COMMAND[0]'
+            else
+                builtin unset PROMPT_COMMAND
+            fi
+            ;;
+    esac
+    builtin unset -f _bmcshell_theme_render
+    builtin unset _BMCSHELL_THEME_ENTRY _BMCSHELL_THEME_DRAWN _BMCSHELL_THEME_IP _BMCSHELL_THEME_VERIFIED
+    builtin unset _BMCSHELL_THEME_SETTINGS
+    _bmcshell_restore_prompt
+}
+
+_bmcshell_load_theme() {
+    local entry=$1
+    [[ ${_BMCSHELL_THEME_ENTRY-} != "$entry" ]] || return 0
+    _bmcshell_unload_theme || return
+    _bmcshell_restore_prompt || return
+    if command -v cygpath >/dev/null; then
+        entry=$(command cygpath -u -- "$entry") || return
+    fi
+    _BMCSHELL_BASE_PS1=${PS1-}
+    if ! builtin source "$entry" || ! builtin declare -F _bmcshell_theme_render >/dev/null; then
+        builtin unset -f _bmcshell_theme_render
+        PS1=$_BMCSHELL_BASE_PS1
+        builtin unset _BMCSHELL_BASE_PS1
+        printf '无法加载活动主题脚本：%s\n' "$entry" >&2
+        return 2
+    fi
+    _BMCSHELL_THEME_ENTRY=$1
+    if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]] &&
+        (( BASH_VERSINFO[0] > 5 || ( BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1 ) )); then
+        PROMPT_COMMAND=(_bmcshell_prompt_command "${PROMPT_COMMAND[@]}")
+    elif [[ -n ${PROMPT_COMMAND-} ]]; then
+        PROMPT_COMMAND="_bmcshell_prompt_command; $PROMPT_COMMAND"
+    else
+        PROMPT_COMMAND=_bmcshell_prompt_command
+    fi
+}
+
 _bmcshell_render_prompt() {
     local prefix
     [[ $- == *i* ]] || return 0
+    if [[ ${1-} == strict ]]; then
+        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=1 _bmcshell_bridge prompt) || return
+    else
+        prefix=$(BMCSHELL_BRIDGE_THEME_SETTINGS=1 _bmcshell_bridge prompt 2>/dev/null) || prefix=
+    fi
+    if [[ $prefix == $'entry:\t'* ]]; then
+        local state=${prefix#*$'\t'}
+        local -a entry
+        # The first line is the script path. Remaining lines are literal key=value arguments.
+        builtin mapfile -t entry <<< "${state#*$'\t'}"
+        state=${state%%$'\t'*}
+        _bmcshell_load_theme "${entry[0]}" || return
+        _BMCSHELL_THEME_SETTINGS=("${entry[@]:1}")
+        _BMCSHELL_THEME_IP=${state%%|*}
+        _BMCSHELL_THEME_VERIFIED=${state#*|}
+        return
+    fi
+    _bmcshell_unload_theme || return
     _bmcshell_restore_prompt || return
-    prefix=$(_bmcshell_bridge prompt 2>/dev/null) || return
     # PS1 is expanded by Bash. Treat the prefix as display text only.
     if [[ -n $prefix && $prefix != *'$'* && $prefix != *'`'* &&
         $prefix != *'\'* && ! $prefix =~ [[:cntrl:]] ]]; then
@@ -362,7 +438,7 @@ _bmcshell_exit() {
     _bmcshell_restore_session_tools || return
     builtin unset BMCSHELL_CONTEXT || return
     _BMCSHELL_SESSION_STATE=()
-    _bmcshell_restore_prompt || :
+    _bmcshell_render_prompt || :
 }
 
 _bmcshell_check_proxy_environment() {
@@ -438,6 +514,159 @@ _bmcshell_proxy() {
         printf 'BMC 全局代理：关闭（已配置 %s）\n' "${state#*|}"
     else
         printf 'BMC 全局代理：开启（SOCKS5 %s）\n' "$address"
+    fi
+}
+
+_bmcshell_check_setting_env_name() {
+    [[ $1 =~ ^[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$ ]] || return 1
+    case $1 in
+        BASH_*|LD_*|DYLD_*|MSYS*|CYGWIN*|BMCSHELL_BRIDGE_*|BMCSHELL_BOOK_*|\
+        BMCSHELL_RESULT_FILE|BMCSHELL_RESOLVER_LIBRARIES|BMCSHELL_RESOLVER_BASH|BMCSHELL_RESOLVER_CORE_EXE|\
+        BMCSHELL_UI_PAGER|BMCSHELL_PROXY_ADDRESS|BMCSHELL_AUTH_PASSWORD|BMCSHELL_SNMP_COMMUNITY) return 1 ;;
+    esac
+}
+
+_bmcshell_apply_setting_environment() {
+    local payload=$1 header row name value declaration flags
+    local -A values=()
+    {
+        IFS= builtin read -r header
+        header=${header%$'\r'}
+        if [[ $header != $'settings-env-v1\t'* ]]; then
+            printf '设置环境的适配响应无效。\n' >&2
+            return 2
+        fi
+        while IFS= builtin read -r row; do
+            row=${row%$'\r'}
+            [[ -n $row ]] || continue
+            name=${row%%=*}
+            if [[ $row != *=* ]] || ! _bmcshell_check_setting_env_name "$name" ||
+                [[ ${values[$name]+set} ]]; then
+                printf '设置环境变量声明无效或重复：%q\n' "$name" >&2
+                return 2
+            fi
+            values[$name]=${row#*=}
+        done
+    } <<< "$payload"
+
+    # Check all affected variables before changing the shell.
+    for name in "${!values[@]}" "${!_BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[@]}"; do
+        declaration=$(builtin declare -p "$name" 2>/dev/null) || continue
+        case $declaration in
+            'declare -- '*|'declare -x '*) ;;
+            *) printf '设置环境变量 %s 的 Bash 属性不受支持，无法重载。\n' "$name" >&2
+               return 2 ;;
+        esac
+    done
+    local address=${header#*$'\t'}
+    if [[ -n $address || -n ${_BMCSHELL_PROXY_ADDRESS-} ]]; then
+        _bmcshell_check_proxy_environment || return
+        _bmcshell_apply_proxy "$address" || return
+    else
+        _BMCSHELL_PROXY_ADDRESS=
+    fi
+
+    for name in "${!_BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[@]}"; do
+        [[ ! ${values[$name]+set} ]] || continue
+        flags=${_BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[$name]}
+        if [[ ${_BMCSHELL_SETTING_ENV_ORIGINAL_VALUES[$name]+set} ]]; then
+            builtin printf -v "$name" '%s' "${_BMCSHELL_SETTING_ENV_ORIGINAL_VALUES[$name]}" || return
+            if [[ $flags == -x ]]; then
+                builtin export "$name" || return
+            else
+                builtin export -n "$name" || return
+            fi
+        else
+            builtin unset "$name" || return
+            if [[ $flags == -x ]]; then
+                builtin export "$name" || return
+            fi
+        fi
+        builtin unset '_BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[$name]' '_BMCSHELL_SETTING_ENV_ORIGINAL_VALUES[$name]'
+    done
+    for name in "${!values[@]}"; do
+        if [[ ! ${_BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[$name]+set} ]]; then
+            declaration=$(builtin declare -p "$name" 2>/dev/null) || declaration=
+            if [[ $declaration == 'declare -x '* ]]; then
+                _BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[$name]=-x
+            else
+                _BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS[$name]=--
+            fi
+            if [[ ${!name+x} ]]; then
+                _BMCSHELL_SETTING_ENV_ORIGINAL_VALUES[$name]=${!name}
+            fi
+        fi
+        value=${values[$name]}
+        builtin export "$name=$value" || return
+    done
+}
+
+_bmcshell_load_setting_environment() {
+    local payload
+    if ! payload=$(_bmcshell_bridge setting-environment 2>&1); then
+        # An updated adapter can still launch an older executable.
+        if [[ ${1-} == startup && $payload == *'未知的 Bash 适配操作 "setting-environment"'* ]]; then
+            if [[ ! ${_BMCSHELL_PROXY_ADDRESS+x} ]]; then
+                _bmcshell_load_proxy || return
+            fi
+            return 0
+        fi
+        printf '%s\n' "$payload" >&2
+        return 2
+    fi
+    _bmcshell_apply_setting_environment "$payload"
+}
+
+_bmcshell_reload_settings() {
+    _bmcshell_load_setting_environment || return
+    _bmcshell_refresh_globals || return
+    _bmcshell_render_prompt strict
+}
+
+_bmcshell_setting_menu_bridge() (
+    local result native_result status
+    result=$(command mktemp -t bmcshell-setting.XXXXXXXX) || return
+    trap 'command rm -f -- "$result"' EXIT
+    native_result=$result
+    if command -v cygpath >/dev/null; then
+        native_result=$(command cygpath -aw -- "$result") || return
+    fi
+    BMCSHELL_BRIDGE_SETTING_RESULT="$native_result" _bmcshell_call setting 1>&3 3>&- || return
+    if IFS= builtin read -r status < "$result"; then
+        builtin printf '%s' "$status"
+    fi
+)
+
+_bmcshell_setting() {
+    local reload=0 result
+    if [[ ${!#} == --reload ]]; then
+        case ${1-} in
+            --reload) (( $# == 1 )) && reload=1 ;;
+            --reset|--check) (( $# >= 2 )) && reload=1 ;;
+            --set) (( $# >= 4 )) && reload=1 ;;
+            --get) (( $# >= 3 )) && reload=1 ;;
+        esac
+        if (( reload )); then
+            set -- "${@:1:$#-1}"
+        fi
+    fi
+    if (( reload && $# == 0 )); then
+        _bmcshell_reload_settings || return
+        printf '已重载当前终端的设置环境。\n'
+        return 0
+    fi
+    if (( $# == 0 )) && [[ -t 0 ]]; then
+        { result=$(_bmcshell_setting_menu_bridge 3>&4 4>&-); } 4>&1 || return
+        [[ $result != committed ]] || reload=1
+    else
+        BMCSHELL_BRIDGE_SETTING_RESULT= _bmcshell_call setting "$@" || return
+    fi
+    if (( reload )); then
+        if ! _bmcshell_reload_settings; then
+            printf '当前终端设置环境重载失败，可运行 bmc setting --reload 重试。\n' >&2
+            return 2
+        fi
+        printf '已重载当前终端的设置环境。\n'
     fi
 }
 
@@ -527,7 +756,7 @@ _bmcshell_complete() {
                 ;;
             status|tool) words+=' --env' ;;
             proxy) words+=' on off -m' ;;
-            setting) words+=' --get --set --reset --check --insecure' ;;
+            setting) words+=' --get --set --reset --check --insecure --reload' ;;
             update) words+=' --file --version' ;;
         esac
     fi
@@ -564,6 +793,15 @@ if [[ ${_BMCSHELL_BASH_RUNTIME-} != 1 ]]; then
     builtin unset _BMCSHELL_PROXY_ADDRESS BMCSHELL_BRIDGE_PROXY
     _BMCSHELL_BASH_RUNTIME=1
 fi
+if [[ ${_BMCSHELL_SETTING_ENV_READY-} != 1 ]]; then
+    if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2 )); then
+        builtin declare -A _BMCSHELL_SETTING_ENV_ORIGINAL_VALUES _BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS || return
+    else
+        builtin declare -gA _BMCSHELL_SETTING_ENV_ORIGINAL_VALUES _BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS || return
+    fi
+    _BMCSHELL_SETTING_ENV_ORIGINAL_VALUES=() _BMCSHELL_SETTING_ENV_ORIGINAL_FLAGS=()
+    _BMCSHELL_SETTING_ENV_READY=1
+fi
 
 _bmcshell_load_proxy() {
     local state address
@@ -575,15 +813,20 @@ _bmcshell_load_proxy() {
     _bmcshell_apply_proxy "$address"
 }
 
-if [[ ! ${_BMCSHELL_PROXY_ADDRESS+x} ]]; then
-    _bmcshell_load_proxy || return
-fi
+_bmcshell_load_setting_environment startup || return
 
 function bmc {
     case ${1-} in
         use) shift; _bmcshell_use "$@" ;;
         exit) shift; _bmcshell_exit "$@" ;;
         proxy) shift; _bmcshell_proxy "$@" ;;
+        setting) shift; _bmcshell_setting "$@" ;;
+        plugin)
+            _bmcshell_public_command "$@" || return
+            case ${2-} in
+                install|upgrade|remove) _bmcshell_render_prompt || : ;;
+            esac
+            ;;
         status|tool)
             BMCSHELL_BRIDGE_STATUS_USER="${_BMCSHELL_SESSION_STATE[v2.user]-}" \
             BMCSHELL_BRIDGE_STATUS_PASSWORD="${_BMCSHELL_SESSION_STATE[v2.password]+set}" \
@@ -607,5 +850,13 @@ function bmc {
 
 if [[ $- == *i* ]]; then
     builtin complete -F _bmcshell_complete bmc
+    _bmcshell_render_prompt || :
 fi
-_bmcshell_refresh_globals
+_bmcshell_refresh_globals || return
+
+if [[ $- == *i* && ${_BMCSHELL_STARTUP_SHOWN-} != 1 ]]; then
+    _bmcshell_startup_version=$("$_BMCSHELL_EXE" --version 2>/dev/null) || _bmcshell_startup_version=BMCShell
+    builtin printf '%s 已加载。bmc use IP 连接设备；bmc help 查看帮助。\n' "${_bmcshell_startup_version%$'\r'}"
+    _BMCSHELL_STARTUP_SHOWN=1
+    builtin unset _bmcshell_startup_version
+fi

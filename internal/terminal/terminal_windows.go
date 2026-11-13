@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +14,18 @@ import (
 
 	"golang.org/x/sys/windows"
 )
+
+var kernel32 = windows.NewLazySystemDLL("kernel32.dll")
+var peekConsoleInput = kernel32.NewProc("PeekConsoleInputW")
+var readConsoleInput = kernel32.NewProc("ReadConsoleInputW")
+var peekNamedPipe = kernel32.NewProc("PeekNamedPipe")
+
+type consoleInputRecord struct {
+	eventType uint16
+	_         uint16
+	keyDown   uint32
+	_         [12]byte
+}
 
 func open(input, output *os.File) *Terminal {
 	inHandle, outHandle := windows.Handle(input.Fd()), windows.Handle(output.Fd())
@@ -28,6 +41,9 @@ func open(input, output *os.File) *Terminal {
 		Width:  int(info.Window.Right) - int(info.Window.Left) + 1,
 		Height: int(info.Window.Bottom) - int(info.Window.Top) + 1,
 		input:  bufio.NewReader(input),
+		waitInput: func(timeout time.Duration) (bool, error) {
+			return waitConsoleInput(inHandle, timeout)
+		},
 		start: func() (func() error, error) {
 			var oldIn, oldOut uint32
 			if err := windows.GetConsoleMode(inHandle, &oldIn); err != nil {
@@ -84,6 +100,9 @@ func openBashTTY(input, output *os.File) *Terminal {
 		Width:  width,
 		Height: height,
 		input:  bufio.NewReader(input),
+		waitInput: func(timeout time.Duration) (bool, error) {
+			return waitPipeInput(windows.Handle(input.Fd()), timeout)
+		},
 		start: func() (func() error, error) {
 			old, err := runStty("-g")
 			if err != nil {
@@ -99,6 +118,60 @@ func openBashTTY(input, output *os.File) *Terminal {
 			}
 			return restore, nil
 		},
+	}
+}
+
+func waitConsoleInput(handle windows.Handle, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		event, err := windows.WaitForSingleObject(handle, uint32(time.Until(deadline).Milliseconds()+1))
+		if err != nil {
+			return false, err
+		}
+		if event == uint32(windows.WAIT_TIMEOUT) {
+			return false, nil
+		}
+		var record consoleInputRecord
+		var count uint32
+		ok, _, err := peekConsoleInput.Call(uintptr(handle), uintptr(unsafe.Pointer(&record)), 1, uintptr(unsafe.Pointer(&count)))
+		if ok == 0 {
+			return false, err
+		}
+		if count == 0 {
+			continue
+		}
+		if record.eventType == windows.KEY_EVENT && record.keyDown != 0 {
+			return true, nil
+		}
+		// A key-up, mouse or focus event makes the handle ready, but
+		// ReadConsole would skip it and wait indefinitely for another key.
+		ok, _, err = readConsoleInput.Call(uintptr(handle), uintptr(unsafe.Pointer(&record)), 1, uintptr(unsafe.Pointer(&count)))
+		if ok == 0 {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func waitPipeInput(handle windows.Handle, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		var available uint32
+		ok, _, err := peekNamedPipe.Call(uintptr(handle), 0, 0, 0, uintptr(unsafe.Pointer(&available)), 0)
+		if ok == 0 {
+			if errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_NO_DATA) {
+				return false, io.EOF
+			}
+			return false, err
+		}
+		if available != 0 {
+			return true, nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false, nil
+		}
+		time.Sleep(min(remaining, 5*time.Millisecond))
 	}
 }
 

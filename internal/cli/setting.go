@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,22 +17,48 @@ const sourcePrefix = "plugin.source."
 var frameworkSettings = []string{"use.default_resolver", "theme.active"}
 
 func (a *app) setting(args []string) error {
+	var reload bool
+	if len(args) > 0 && args[len(args)-1] == "--reload" {
+		switch {
+		case len(args) == 1,
+			args[0] == "--set" && len(args) >= 4,
+			args[0] == "--get" && len(args) >= 3,
+			(args[0] == "--reset" || args[0] == "--check") && len(args) >= 2:
+			reload = true
+			args = args[:len(args)-1]
+		}
+	}
+	if reload && len(args) == 0 {
+		return errors.New("请在加载了 BMCShell 的 Bash 中运行 bmc setting --reload")
+	}
+	err := a.runSetting(args)
+	if err == nil && reload {
+		fmt.Fprintln(a.errOut, "请在当前 Bash 运行 bmc setting --reload，以更新终端环境。")
+	}
+	return err
+}
+
+func (a *app) runSetting(args []string) error {
 	cfg, err := settings.Load(a.home)
 	if err != nil {
 		return err
 	}
 	if len(args) == 0 {
-		return a.settingsMenu(cfg)
+		if terminalInput(a.in) {
+			return a.settingsMenu()
+		}
+		return a.listSettings(cfg)
 	}
 	if len(args) == 1 && args[0] == "--check" {
 		return a.checkSettings(cfg)
 	}
 	if len(args) == 1 && args[0] == "--reset" {
-		cfg.Theme, cfg.DefaultResolver, cfg.EnvDefaults = "", nil, nil
-		if err := settings.Save(a.home, cfg); err != nil {
-			return err
-		}
-		if err := catalog.Open(a.home).ResetSources(); err != nil {
+		if err := settings.Update(a.home, func(cfg *settings.Config) error {
+			cfg.Theme, cfg.DefaultResolver, cfg.EnvDefaults, cfg.ThemeSettings, cfg.PluginSettings = "", nil, nil, nil, nil
+			sources := []catalog.Source{}
+			cfg.Sources = &sources
+			return nil
+		}); err != nil {
 			return err
 		}
 		fmt.Fprintln(a.out, "已恢复框架与扩展的默认设置。")
@@ -44,44 +69,77 @@ func (a *app) setting(args []string) error {
 	}
 	action, key := args[0], args[1]
 	if name, ok := strings.CutPrefix(key, sourcePrefix); ok {
-		return a.sourceSetting(action, name, args[2:])
-	}
-	value, err := a.settingValue(cfg, key)
-	if err != nil {
-		return err
+		return a.sourceSetting(action, name, key, args[2:])
 	}
 	switch {
 	case action == "--get" && len(args) == 2:
+		value, err := a.settingValue(cfg, key)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintln(a.out, value)
 		return nil
 	case action == "--set" && len(args) == 3:
-		if err := a.setValue(&cfg, key, args[2]); err != nil {
-			return err
-		}
+		return a.changeSetting(key, key, &args[2])
 	case action == "--reset" && len(args) == 2:
-		switch key {
-		case "use.default_resolver":
-			cfg.DefaultResolver = nil
-		case "theme.active":
-			cfg.Theme = ""
-		default:
-			delete(cfg.EnvDefaults, key)
-		}
+		return a.changeSetting(key, key, nil)
 	default:
 		return errors.New("设置操作缺失或参数无效。运行 bmc setting --help 查看用法")
 	}
-	next, err := a.settingValue(cfg, key)
+}
+
+// A nil value restores the default for the selected setting.
+func (a *app) changeSetting(key, label string, value *string) error {
+	var before, next string
+	err := settings.Update(a.home, func(cfg *settings.Config) error {
+		var err error
+		before, err = a.settingValue(*cfg, key)
+		if err != nil {
+			if key != "theme.active" {
+				return err
+			}
+			// A removed theme package must not prevent a new selection or reset.
+			before = cfg.Theme
+		}
+		if err := a.editSetting(cfg, key, value); err != nil {
+			return err
+		}
+		next, err = a.settingValue(*cfg, key)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	if err := settings.Save(a.home, cfg); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.out, "%s: %q → %q\n", key, value, next)
+	fmt.Fprintf(a.out, "%s: %q → %q\n", label, before, next)
 	return nil
 }
 
-func (a *app) settingsMenu(cfg settings.Config) error {
+func (a *app) editSetting(cfg *settings.Config, key string, value *string) error {
+	if isPluginSetting(key) {
+		p, field, err := a.pluginSetting(*cfg, key)
+		if err != nil {
+			return err
+		}
+		return setPluginSetting(cfg, p, field, value)
+	}
+	if value != nil {
+		return a.setValue(cfg, key, *value)
+	}
+	switch key {
+	case "use.default_resolver":
+		cfg.DefaultResolver = nil
+	case "theme.active":
+		cfg.Theme = ""
+	default:
+		if _, err := a.settingField(key); err != nil {
+			return err
+		}
+		delete(cfg.EnvDefaults, key)
+	}
+	return nil
+}
+
+func (a *app) listSettings(cfg settings.Config) error {
 	registry, err := a.environment()
 	if err != nil {
 		return err
@@ -99,34 +157,32 @@ func (a *app) settingsMenu(cfg settings.Config) error {
 		}
 		fmt.Fprintf(a.out, "%s = %q\n", key, value)
 	}
-	sources, err := catalog.Open(a.home).Sources()
+	if cfg.Theme != "" {
+		theme, err := a.activeTheme(cfg)
+		if err != nil {
+			return err
+		}
+		for _, field := range theme.Settings {
+			fmt.Fprintf(a.out, "%s%s = %q\n", themeSettingPrefix, field.Key, themeSettingValue(cfg, theme, field))
+		}
+	}
+	installed, err := a.store.List()
+	if err != nil {
+		return err
+	}
+	for _, p := range installed {
+		for _, field := range p.Settings {
+			fmt.Fprintf(a.out, "%s%s.%s = %q\n", pluginSettingPrefix, p.Name, field.Key, themeSettingValue(cfg, p, field))
+		}
+	}
+	sources, err := catalog.Open(a.home).ConfigSources(cfg)
 	if err != nil {
 		return err
 	}
 	for _, source := range sources {
 		fmt.Fprintf(a.out, "%s%s = %s%s\n", sourcePrefix, source.Name, redactSource(source.URL), sourceSettingOption(source))
 	}
-	if !terminalInput(a.in) {
-		return nil
-	}
-	input := bufio.NewReader(a.in)
-	fmt.Fprint(a.out, "[1] 修改设置  [2] 恢复单项默认  [回车] 返回：")
-	switch readChoice(input) {
-	case "1":
-		fmt.Fprintf(a.out, "设置名称（软件源使用 %s<名称>）：", sourcePrefix)
-		key, _ := input.ReadString('\n')
-		fmt.Fprint(a.out, "新值：")
-		value, _ := input.ReadString('\n')
-		return a.setting([]string{"--set", strings.TrimSpace(key), strings.TrimRight(value, "\r\n")})
-	case "2":
-		fmt.Fprint(a.out, "设置名称：")
-		key, _ := input.ReadString('\n')
-		return a.setting([]string{"--reset", strings.TrimSpace(key)})
-	case "":
-		return nil
-	default:
-		return errors.New("设置选项无效")
-	}
+	return nil
 }
 
 func (a *app) checkSettings(cfg settings.Config) error {
@@ -140,7 +196,7 @@ func (a *app) checkSettings(cfg settings.Config) error {
 			return fmt.Errorf("设置 %s 的值无效", name)
 		}
 	}
-	if _, err := catalog.Open(a.home).Sources(); err != nil {
+	if _, err := catalog.Open(a.home).ConfigSources(cfg); err != nil {
 		return err
 	}
 	if cfg.DefaultResolver != nil {
@@ -153,12 +209,21 @@ func (a *app) checkSettings(cfg settings.Config) error {
 		}
 	}
 	if cfg.Theme != "" {
-		p, err := a.store.Find(cfg.Theme)
-		if err != nil {
+		if _, err := a.activeTheme(cfg); err != nil {
 			return err
 		}
-		if p.Type != "theme" {
-			return errors.New("当前主题设置引用的包不是主题包")
+	}
+	installed, err := a.store.List()
+	if err != nil {
+		return err
+	}
+	for _, p := range installed {
+		for _, field := range p.Settings {
+			if value, ok := pluginSettingOverride(cfg, p.ID, field.Key); ok {
+				if err := field.Validate(value); err != nil {
+					return fmt.Errorf("设置 %s%s.%s 无效：%w", pluginSettingPrefix, p.Name, field.Key, err)
+				}
+			}
 		}
 	}
 	fmt.Fprintln(a.out, "设置检查通过。")
@@ -184,11 +249,18 @@ func (a *app) settingValue(cfg settings.Config, key string) (string, error) {
 		if cfg.Theme == "" {
 			return "none", nil
 		}
-		p, err := a.store.Find(cfg.Theme)
+		p, err := a.activeTheme(cfg)
 		if err != nil {
 			return "", err
 		}
 		return p.Name, nil
+	}
+	if isPluginSetting(key) {
+		p, field, err := a.pluginSetting(cfg, key)
+		if err != nil {
+			return "", err
+		}
+		return themeSettingValue(cfg, p, field), nil
 	}
 	field, err := a.settingField(key)
 	if err != nil {
@@ -224,7 +296,14 @@ func (a *app) setValue(cfg *settings.Config, key, value string) error {
 		if err != nil {
 			return err
 		}
-		resolver, err := session.SelectResolver(list, value, nil)
+		// The menu carries the precise installed provider and export. CLI aliases
+		// remain valid for packages with one resolver or an unambiguous export.
+		var fallback *settings.Resolver
+		if id, export, ok := strings.Cut(value, "/"); ok {
+			fallback = &settings.Resolver{ExtensionID: id, Export: export}
+			value = ""
+		}
+		resolver, err := session.SelectResolver(list, value, fallback)
 		if err != nil {
 			return err
 		}
@@ -260,7 +339,7 @@ func (a *app) settingField(key string) (envregistry.Field, error) {
 	return field, nil
 }
 
-func (a *app) sourceSetting(action, name string, args []string) error {
+func (a *app) sourceSetting(action, name, label string, args []string) error {
 	repository := catalog.Open(a.home)
 	sources, err := repository.Sources()
 	if err != nil {
@@ -290,7 +369,7 @@ func (a *app) sourceSetting(action, name string, args []string) error {
 	default:
 		return errors.New("设置操作缺失或参数无效。运行 bmc setting --help 查看用法")
 	}
-	fmt.Fprintf(a.out, "%s%s: %q%s → %q%s\n", sourcePrefix, name,
+	fmt.Fprintf(a.out, "%s: %q%s → %q%s\n", label,
 		redactSource(before.URL), sourceSettingOption(before), redactSource(after.URL), sourceSettingOption(after))
 	return nil
 }

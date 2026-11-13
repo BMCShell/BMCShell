@@ -161,6 +161,10 @@ func Resolve(resolver Resolver, ip string, argv []string, address string, enviro
 	if (resolution.Username == "") != (resolution.Password == "") {
 		return Resolution{}, errors.New("解析器须同时返回 auth.username 和 auth.password")
 	}
+	// This resolver returns credentials only after successful login.
+	if resolver.Package.ID == "bf50a343-ad6c-4f8d-b4b7-43bb4475bc78" && resolution.Password != "" {
+		resolution.Context["target.auth_verified"] = "true"
+	}
 	return resolution, nil
 }
 

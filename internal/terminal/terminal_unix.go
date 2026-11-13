@@ -4,7 +4,9 @@ package terminal
 
 import (
 	"bufio"
+	"errors"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +24,17 @@ func open(input, output *os.File) *Terminal {
 		Width:  int(size.Col),
 		Height: int(size.Row),
 		input:  bufio.NewReader(input),
+		waitInput: func(timeout time.Duration) (bool, error) {
+			deadline := time.Now().Add(timeout)
+			fds := []unix.PollFd{{Fd: int32(inFD), Events: unix.POLLIN}}
+			for time.Now().Before(deadline) {
+				n, err := unix.Poll(fds, int(time.Until(deadline).Milliseconds())+1)
+				if !errors.Is(err, unix.EINTR) {
+					return n > 0, err
+				}
+			}
+			return false, nil
+		},
 		start: func() (func() error, error) {
 			old, err := unix.IoctlGetTermios(inFD, getTermios)
 			if err != nil {

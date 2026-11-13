@@ -176,7 +176,7 @@ var builtinHelp = map[string]render.Topic{
 		},
 	},
 	"setting": {
-		Summary: "查看、修改、重置和检查框架与扩展设置。",
+		Summary: "在交互终端中按分组编辑设置草稿，保存退出后重载环境。",
 		Usage: []string{
 			"bmc setting",
 			"bmc setting --get <设置名>",
@@ -184,16 +184,20 @@ var builtinHelp = map[string]render.Topic{
 			"bmc setting --set plugin.source.<名称> <软件源 HTTPS URL> [--insecure]",
 			"bmc setting --reset [设置名]",
 			"bmc setting --check",
+			"bmc setting --reload",
 		},
 		Options: []render.Option{
 			{Name: "--get <设置名>", Description: "输出当前值。"},
-			{Name: "--set <设置名> <值>", Description: "保存指定设置。交互终端中，bmc setting 也会打开设置菜单。"},
+			{Name: "--set <设置名> <值>", Description: "保存指定设置。"},
 			{Name: "--reset [设置名]", Description: "恢复单项默认值，或移除指定软件源。省略设置名会清除框架与扩展设置及已配置的软件源。"},
 			{Name: "--check", Description: "检查已保存设置的有效性。"},
+			{Name: "--reload", Description: "重载当前 Bash 的设置环境。可单独使用，也可加在设置命令末尾。"},
 			{Name: "--insecure", Description: "仅在配置支持该选项的私有 HTTPS 软件源时跳过证书校验。", Default: "校验证书"},
 		},
 		Examples: []render.Example{
 			{Command: "bmc setting --get use.default_resolver", Description: "查看默认解析器。"},
+			{Command: "bmc setting --get theme.<参数键>", Description: "读取当前主题声明的参数。也可用 --set 修改，或用 --reset 恢复该参数的默认值。"},
+			{Command: "bmc setting --set plugin.<包名>.<参数键> <值> --reload", Description: "保存指定插件的参数并重载环境。"},
 			{Command: "bmc setting --check", Description: "检查设置是否有效。"},
 		},
 	},

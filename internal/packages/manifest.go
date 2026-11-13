@@ -80,6 +80,7 @@ type Manifest struct {
 	DisplayName        string                        `json:"displayName,omitempty"`
 	Description        string                        `json:"description,omitempty"`
 	EnvRegistry        string                        `json:"envRegistry,omitempty"`
+	Settings           []PluginSetting               `json:"settings,omitempty"`
 	Summary            string                        `json:"summary"`
 	Version            string                        `json:"version"`
 	License            string                        `json:"license"`
@@ -198,6 +199,9 @@ func (p Package) validate() error {
 		return err
 	}
 	if err := p.validateIdentity(); err != nil {
+		return err
+	}
+	if err := p.validatePluginSettings(); err != nil {
 		return err
 	}
 	platform := runtime.GOOS + "-" + runtime.GOARCH

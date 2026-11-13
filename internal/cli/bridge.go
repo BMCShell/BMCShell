@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -237,6 +238,8 @@ func (a *app) bridge(args []string) error {
 		return a.proxyAddressBridge(args[1:])
 	case "proxy-config":
 		return a.proxyConfigBridge(args[1:])
+	case "setting-environment":
+		return a.settingEnvironmentBridge(args[1:])
 	case "completion":
 		return a.completion(args[1:])
 	case "proxy-run":
@@ -467,19 +470,42 @@ func (a *app) runTool(name string, args []string) error {
 
 func (a *app) prompt() error {
 	ctx, err := session.Current()
-	if err != nil || ctx == nil {
+	if err != nil {
 		return err
 	}
 	cfg, err := settings.Load(a.home)
 	if err != nil || cfg.Theme == "" {
 		return err
 	}
-	p, err := a.store.Find(cfg.Theme)
+	p, err := a.activeTheme(cfg)
 	if err != nil {
 		return err
 	}
-	if p.Type != "theme" {
-		return errors.New("当前主题设置引用的包不是主题包")
+	if filepath.Base(p.Data) == ".bashrc.perso" {
+		path, err := p.File(p.Data)
+		if err != nil {
+			return err
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		if !session.Printable(path) {
+			return errors.New("主题脚本路径含有无效字符")
+		}
+		verified := ctx["target.auth_verified"] == "true"
+		var response strings.Builder
+		fmt.Fprintf(&response, "entry:\t%s|%t\t%s", ctx["target.ip"], verified, path)
+		if os.Getenv("BMCSHELL_BRIDGE_THEME_SETTINGS") == "1" {
+			for _, field := range p.Settings {
+				fmt.Fprintf(&response, "\n%s=%s", field.Key, themeSettingValue(cfg, p, field))
+			}
+		}
+		_, err = io.WriteString(a.out, response.String())
+		return err
+	}
+	if ctx == nil {
+		return nil
 	}
 	var theme struct{ Prefix string }
 	if err := readPackageJSON(p, p.Data, &theme); err != nil {

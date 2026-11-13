@@ -19,6 +19,7 @@ import (
 
 	"bmcshell/internal/filelock"
 	"bmcshell/internal/proxy"
+	"bmcshell/internal/settings"
 )
 
 const (
@@ -29,12 +30,7 @@ const (
 
 var sourceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 
-type Source struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Official    bool   `json:"official,omitempty"`
-	InsecureTLS bool   `json:"insecureTls,omitempty"`
-}
+type Source = settings.Source
 
 type RefreshResult struct {
 	Source string
@@ -43,6 +39,7 @@ type RefreshResult struct {
 }
 
 type Store struct {
+	home              string
 	root              string
 	client            *http.Client
 	insecureTransport func() *http.Transport
@@ -56,6 +53,7 @@ func OpenWithProxy(home, address string) *Store {
 	client := client
 	client.Transport = proxy.HTTPTransport(address)
 	return &Store{
+		home:   home,
 		root:   filepath.Join(home, "catalog"),
 		client: &client,
 		insecureTransport: sync.OnceValue(func() *http.Transport {
@@ -71,26 +69,28 @@ func OpenWithProxy(home, address string) *Store {
 }
 
 func (s *Store) Sources() ([]Source, error) {
-	data, err := readFile(filepath.Join(s.root, "sources.json"), maxConfigBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	cfg, err := settings.Load(s.home)
 	if err != nil {
 		return nil, err
 	}
+	return s.ConfigSources(cfg)
+}
+
+// ConfigSources reads the current configuration or the legacy catalog file
+// when software sources have not been saved to settings.json.
+func (s *Store) ConfigSources(cfg settings.Config) ([]Source, error) {
 	var sources []Source
-	if err := json.Unmarshal(data, &sources); err != nil || sources == nil || len(sources) > maxSources {
-		return nil, errors.New("软件源配置无效")
-	}
-	seen := make(map[string]bool, len(sources))
-	for _, source := range sources {
-		if err := source.validate(); err != nil {
+	if cfg.Sources != nil {
+		sources = slices.Clone(*cfg.Sources)
+	} else {
+		var err error
+		sources, err = s.legacySources()
+		if err != nil {
 			return nil, err
 		}
-		if seen[source.Name] {
-			return nil, fmt.Errorf("软件源 %q 重复", source.Name)
-		}
-		seen[source.Name] = true
+	}
+	if err := ValidateSources(sources); err != nil {
+		return nil, err
 	}
 	sort.Slice(sources, func(i, j int) bool {
 		a, b := sources[i], sources[j]
@@ -102,20 +102,49 @@ func (s *Store) Sources() ([]Source, error) {
 	return sources, nil
 }
 
+func (s *Store) legacySources() ([]Source, error) {
+	data, err := readFile(filepath.Join(s.root, "sources.json"), maxConfigBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var sources []Source
+	if err := json.Unmarshal(data, &sources); err != nil || sources == nil {
+		return nil, errors.New("软件源配置无效")
+	}
+	return sources, nil
+}
+
+func ValidateSources(sources []Source) error {
+	if len(sources) > maxSources {
+		return fmt.Errorf("最多可配置 %d 个软件源", maxSources)
+	}
+	seen := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		if err := ValidateSource(source); err != nil {
+			return err
+		}
+		if seen[source.Name] {
+			return fmt.Errorf("软件源 %q 重复", source.Name)
+		}
+		seen[source.Name] = true
+	}
+	return nil
+}
+
 func (s *Store) SetSource(source Source) error {
-	if err := source.validate(); err != nil {
+	if err := ValidateSource(source); err != nil {
 		return err
 	}
-	return s.withLock(func() error {
-		sources, err := s.Sources()
+	return settings.Update(s.home, func(cfg *settings.Config) error {
+		sources, err := s.ConfigSources(*cfg)
 		if err != nil {
 			return err
 		}
 		index := slices.IndexFunc(sources, func(existing Source) bool { return existing.Name == source.Name })
 		if index >= 0 {
-			if sources[index] == source {
-				return nil
-			}
 			sources[index] = source
 		} else {
 			if len(sources) >= maxSources {
@@ -123,7 +152,8 @@ func (s *Store) SetSource(source Source) error {
 			}
 			sources = append(sources, source)
 		}
-		return writeJSON(filepath.Join(s.root, "sources.json"), sources)
+		cfg.Sources = &sources
+		return nil
 	})
 }
 
@@ -131,8 +161,8 @@ func (s *Store) RemoveSource(name string) error {
 	if !sourceName.MatchString(name) {
 		return fmt.Errorf("软件源名称 %q 无效", name)
 	}
-	return s.withLock(func() error {
-		sources, err := s.Sources()
+	if err := settings.Update(s.home, func(cfg *settings.Config) error {
+		sources, err := s.ConfigSources(*cfg)
 		if err != nil {
 			return err
 		}
@@ -140,18 +170,41 @@ func (s *Store) RemoveSource(name string) error {
 		if index < 0 {
 			return fmt.Errorf("尚未配置软件源 %q", name)
 		}
-		if err := writeJSON(filepath.Join(s.root, "sources.json"), slices.Delete(sources, index, index+1)); err != nil {
+		sources = slices.Delete(sources, index, index+1)
+		cfg.Sources = &sources
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.PruneRemovedSourceCaches([]string{name})
+	return nil
+}
+
+// PruneRemovedSourceCaches clears caches only for names still absent from the
+// committed configuration. It also coordinates with in-flight index refreshes.
+func (s *Store) PruneRemovedSourceCaches(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	_ = s.withLock(func() error {
+		sources, err := s.Sources()
+		if err != nil {
 			return err
 		}
-		// A disabled source is excluded from Entries even if its cache cannot be removed.
-		_ = os.Remove(s.indexPath(name))
+		for _, name := range names {
+			if sourceName.MatchString(name) && !slices.ContainsFunc(sources, func(source Source) bool { return source.Name == name }) {
+				_ = os.Remove(s.indexPath(name))
+			}
+		}
 		return nil
 	})
 }
 
 func (s *Store) ResetSources() error {
-	return s.withLock(func() error {
-		return writeJSON(filepath.Join(s.root, "sources.json"), []Source{})
+	return settings.Update(s.home, func(cfg *settings.Config) error {
+		sources := []Source{}
+		cfg.Sources = &sources
+		return nil
 	})
 }
 
@@ -251,7 +304,7 @@ func (s *Store) Entries() ([]Entry, error) {
 // CachedEntries reads every entry in the cached index for a configured source.
 // A nil slice with no error means there is no cache matching the configuration.
 func (s *Store) CachedEntries(source Source) ([]Entry, error) {
-	if err := source.validate(); err != nil {
+	if err := ValidateSource(source); err != nil {
 		return nil, err
 	}
 	data, err := readFile(s.indexPath(source.Name), maxIndexBytes*2)
@@ -275,7 +328,7 @@ func (s *Store) CachedEntries(source Source) ([]Entry, error) {
 	return entries, nil
 }
 
-func (source Source) validate() error {
+func ValidateSource(source Source) error {
 	if !sourceName.MatchString(source.Name) || source.Official != (source.Name == "official") {
 		return fmt.Errorf("软件源名称 %q 无效。official 保留给官方源", source.Name)
 	}

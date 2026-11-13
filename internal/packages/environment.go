@@ -52,7 +52,20 @@ func (s *Store) Environment(list []Package) (envregistry.Registry, error) {
 			}
 		}
 	}
+	settingOwners := make(map[string]string)
 	for _, p := range list {
+		for _, field := range p.Settings {
+			if field.Env == "" {
+				continue
+			}
+			if _, exists := registry[field.Env]; exists {
+				return nil, fmt.Errorf("包 %s 的设置环境变量 %q 已在环境变量登记表声明", p.ID, field.Env)
+			}
+			if owner, exists := settingOwners[field.Env]; exists {
+				return nil, fmt.Errorf("设置环境变量 %q 在包 %s 和包 %s 中重复声明", field.Env, owner, p.ID)
+			}
+			settingOwners[field.Env] = p.ID
+		}
 		for tool, spec := range p.Provides.Tools {
 			if err := checkToolEnvironment(registry, owners, p, spec); err != nil {
 				return nil, fmt.Errorf("工具 %s：%w", tool, err)

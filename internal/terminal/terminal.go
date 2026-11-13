@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"time"
 )
 
 type Key uint8
@@ -23,6 +24,7 @@ const (
 type Terminal struct {
 	Width, Height int
 	input         *bufio.Reader
+	waitInput     func(time.Duration) (bool, error)
 	start         func() (func() error, error)
 	restore       func() error
 }

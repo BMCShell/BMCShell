@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -18,7 +19,53 @@ import (
 	"time"
 
 	"bmcshell/internal/packages"
+	"bmcshell/internal/settings"
 )
+
+func TestLegacySourcesMigrateOnWrite(t *testing.T) {
+	home := t.TempDir()
+	store := Open(home)
+	legacy := filepath.Join(home, "catalog", "sources.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+		t.Fatal(err)
+	}
+	const legacyJSON = `[{"name":"official","url":"https://example.test/index.json","official":true}]`
+	if err := os.WriteFile(legacy, []byte(legacyJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Update(home, func(cfg *settings.Config) error {
+		cfg.Theme = "theme-fixture"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sources, err := store.Sources(); err != nil || len(sources) != 1 || sources[0].Name != "official" {
+		t.Fatalf("legacy source = %+v, %v", sources, err)
+	}
+	source := Source{Name: "team", URL: "https://10.0.0.2/index.json", InsecureTLS: true}
+	if err := store.SetSource(source); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := settings.Load(home)
+	if err != nil || cfg.Theme != "theme-fixture" || cfg.Sources == nil || len(*cfg.Sources) != 2 {
+		t.Fatalf("migrated settings = %+v, %v", cfg, err)
+	}
+	for _, name := range []string{"official", "team"} {
+		if err := store.RemoveSource(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sources, err := store.Sources(); err != nil || len(sources) != 0 {
+		t.Fatalf("removed source was restored from legacy: %+v, %v", sources, err)
+	}
+	cfg, err = settings.Load(home)
+	if err != nil || cfg.Sources == nil || len(*cfg.Sources) != 0 {
+		t.Fatalf("empty migrated sources = %+v, %v", cfg, err)
+	}
+	if data, err := os.ReadFile(legacy); err != nil || string(data) != legacyJSON {
+		t.Fatalf("legacy source data = %q, %v", data, err)
+	}
+}
 
 func TestRefreshAndDownload(t *testing.T) {
 	manifest := packages.Manifest{
